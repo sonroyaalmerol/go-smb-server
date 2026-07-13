@@ -118,11 +118,19 @@ func parseContextTag(b []byte) ([]byte, error) {
 }
 
 func WrapSPNEGOChallenge(challenge []byte) ([]byte, error) {
+	return wrapNegTokenResp(1, challenge)
+}
+
+func WrapSPNEGOAccept() ([]byte, error) {
+	return wrapNegTokenResp(0, nil)
+}
+
+func wrapNegTokenResp(negState int, responseToken []byte) ([]byte, error) {
 	resp := struct {
 		NegState      asn1.Enumerated       `asn1:"explicit,tag:0"`
-		SupportedMech asn1.ObjectIdentifier `asn1:"explicit,tag:1"`
-		ResponseToken []byte                `asn1:"explicit,tag:2"`
-	}{1, ntlmOID, challenge}
+		SupportedMech asn1.ObjectIdentifier `asn1:"explicit,optional,tag:1"`
+		ResponseToken []byte                `asn1:"explicit,optional,tag:2"`
+	}{asn1.Enumerated(negState), ntlmOID, responseToken}
 	respBytes, err := asn1.Marshal(resp)
 	if err != nil {
 		return nil, err

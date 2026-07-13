@@ -110,7 +110,11 @@ func (s *ServerAuthenticator) handleAuthenticate(ctx context.Context, msg []byte
 		Username: s.user,
 		Domain:   s.domain,
 	}
-	return auth.AcceptResult{Identity: ident, SessionKey: sessionKey}, nil
+	acceptToken, err := WrapSPNEGOAccept()
+	if err != nil {
+		return auth.AcceptResult{}, fmt.Errorf("ntlmssp: wrap accept: %w", err)
+	}
+	return auth.AcceptResult{Identity: ident, SessionKey: sessionKey, OutputToken: acceptToken}, nil
 }
 
 // AV_PAIR attribute IDs (MS-NLMP section 2.2.2.1).

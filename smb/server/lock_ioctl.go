@@ -108,18 +108,21 @@ func (c *conn) handleIoctl(_ context.Context, msg []byte, tr *tree) uint32 {
 	if err := req.Parse(msg); err != nil {
 		return c.errBody(wire.StatusInvalidParameter)
 	}
-	if _, ok := tr.opens[req.FileId]; !ok {
-		return c.errBody(wire.StatusInvalidHandle)
-	}
 	switch req.CtlCode {
-	case wire.FSCTLQueryNetworkInterfaceInfo:
-		c.out = wire.IoctlResponseAppend(c.out, nil)
-		return wire.StatusSuccess
 	case wire.FSCTLValidateNegotiateInfo:
 		resp := buildValidateNegotiateInfo(c.srv.dialect, c.srv.guid)
-		c.out = wire.IoctlResponseAppend(c.out, resp)
+		c.out = wire.IoctlResponseAppend(c.out, req.CtlCode, req.FileId, resp)
+		return wire.StatusSuccess
+	case wire.FSCTLQueryNetworkInterfaceInfo:
+		c.out = wire.IoctlResponseAppend(c.out, req.CtlCode, req.FileId, nil)
 		return wire.StatusSuccess
 	default:
+		if tr == nil {
+			return c.errBody(wire.StatusInvalidDeviceRequest)
+		}
+		if _, ok := tr.opens[req.FileId]; !ok {
+			return c.errBody(wire.StatusInvalidHandle)
+		}
 		return c.errBody(wire.StatusNotSupported)
 	}
 }
