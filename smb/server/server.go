@@ -342,11 +342,14 @@ func (c *conn) handleMessage(ctx context.Context, msg []byte) {
 		hdr.EncodeAt(c.out[respStart:])
 
 		if sess := c.getSession(hdr.SessionId); sess != nil && sess.signingKey != nil {
-			subResp := c.out[respStart:]
-			hdr.Flags |= wire.FlagSigned
-			binary.LittleEndian.PutUint32(subResp[16:20], hdr.Flags)
-			if err := signing.Sign(subResp, sess.signingKey, sess.signingAlgo); err != nil {
-				c.log.Debug("sign response failed", "err", err)
+			encrypting := sess.requireEncrypt && hdr.Command != wire.CmdNegotiate && hdr.Command != wire.CmdSessionSetup
+			if !encrypting {
+				subResp := c.out[respStart:]
+				hdr.Flags |= wire.FlagSigned
+				binary.LittleEndian.PutUint32(subResp[16:20], hdr.Flags)
+				if err := signing.Sign(subResp, sess.signingKey, sess.signingAlgo); err != nil {
+					c.log.Debug("sign response failed", "err", err)
+				}
 			}
 		}
 

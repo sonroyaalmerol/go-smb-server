@@ -42,12 +42,13 @@ const serverChallengeFlags = FlagNegotiateUnicode |
 	FlagRequestTarget |
 	FlagNegotiateNTLM |
 	FlagNegotiateSign |
+	FlagNegotiateSeal |
 	FlagNegotiateAlwaysSign |
 	FlagNegotiateExtSecurity |
 	FlagNegotiateTargetInfo |
 	FlagNegotiate128 |
 	FlagNegotiateVersion |
-	FlagTargetTypeServer
+	FlagNegotiateKeyExch
 
 func NTOWFv2(password, user, domain string) []byte {
 	hash := md4.New()
