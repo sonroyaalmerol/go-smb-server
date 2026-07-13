@@ -15,6 +15,7 @@ type Identity struct {
 type AcceptResult struct {
 	OutputToken []byte
 	Identity    *Identity
+	SessionKey  []byte
 }
 
 type Authenticator interface {

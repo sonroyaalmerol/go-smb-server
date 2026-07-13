@@ -117,6 +117,8 @@ type session struct {
 	authenticated bool
 	trees         map[uint32]*tree
 	nextTreeID    uint32
+	signingKey    []byte
+	requireSign   bool
 }
 
 type tree struct {

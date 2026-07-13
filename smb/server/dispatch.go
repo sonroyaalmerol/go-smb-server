@@ -152,6 +152,7 @@ func (c *conn) handleSessionSetup(ctx context.Context, msg []byte, hdr *wire.Hea
 	if result.Identity != nil {
 		sess.identity = result.Identity
 		sess.authenticated = true
+		sess.signingKey = result.SessionKey
 	}
 	c.out = ssr.Append(c.out)
 	if sess.authenticated {
