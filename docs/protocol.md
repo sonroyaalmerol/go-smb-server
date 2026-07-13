@@ -70,6 +70,17 @@ This document catalogs the SMB2/3 protocol features implemented by go-smb-server
 | 0x00060194 | FSCTL_DFS_GET_REFERRALS | ❌ |
 | 0x001440F2 | FSCTL_SRV_COPYCHUNK | ❌ |
 
+## Named Pipes & DCE/RPC
+
+| Feature | Status |
+|---------|--------|
+| IPC$ share auto-registration | ✅ |
+| SRVSVC pipe (\srvsvc) | ✅ NetrShareEnum (opnum 15) returning SHARE_INFO_1 |
+| DCE/RPC BIND/BIND_ACK | ✅ Connection-oriented PDU |
+| DCE/RPC REQUEST/RESPONSE | ✅ Minimal codec |
+| FSCTL_PIPE_WAIT / FSCTL_PIPE_TRANSCEIVE | ❌ |
+| Windows Explorer share browsing | ⚠️ Infrastructure in place; smbclient -L needs IOCTL debugging |
+
 ## NTSTATUS Codes
 
 28 status codes defined in `smb/wire/status.go` covering all standard SMB2 responses:

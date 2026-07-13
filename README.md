@@ -76,6 +76,7 @@ Supporting packages:
 |--------|------|------------|---------------------|
 | `go-smb2` (reference) | NTLMv2 | AES-128-CCM | Full interop |
 | `smbclient` (Samba 4.24) | NTLMv2 | — | ls, get, put, mkdir, rm, rmdir |
+| `smbclient` share enum | NTLMv2 | — | ⚠️ IPC$+SRVSVC infrastructure ready, needs IOCTL debug |
 
 ## Specs
 

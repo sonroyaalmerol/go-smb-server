@@ -165,3 +165,22 @@ func (h *myHandle) Enumerate(ctx context.Context, pattern string) iter.Seq2[vfs.
 ```
 
 The server calls `yield` repeatedly, encoding each entry into the QUERY_DIRECTORY response until the buffer is full or the iterator is exhausted. Errors from `yield` stop enumeration. The `STATUS_NO_MORE_FILES` response is sent when the iterator finishes.
+
+## PipeBackend (named pipes / DCE/RPC)
+
+`PipeBackend` implements the VFS interfaces for SMB named pipes. Each pipe is
+registered with a name and a handler function that processes raw DCE/RPC data:
+
+```go
+pb := vfs.NewPipeBackend()
+pb.Register("srvsvc", vfs.SrvsvcHandler(shareList))
+share := vfs.NewDiskShare("IPC$", pb)
+```
+
+The server automatically creates an `IPC$` share with a `srvsvc` pipe handler
+during initialization. The handler processes DCE/RPC BIND and NetrShareEnum
+requests to support Windows Explorer share browsing.
+
+Pipe I/O follows the standard named pipe model: clients WRITE DCE/RPC request
+data to the pipe, and READ the RPC response from the pipe. The `PipeBackend`
+buffers writes and processes them on the next read.
