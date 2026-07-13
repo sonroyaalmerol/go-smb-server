@@ -25,8 +25,15 @@ func UTF16ToBytes(s string) []byte {
 }
 
 const FileDirInfoMinSize = 64
+const FileIdBothDirInfoMinSize = 102
+
+const (
+	FileDirectoryInformation       = 0x01
+	FileIdBothDirectoryInformation = 0x25
+)
 
 const fileDirInfoFixed = 64
+const fileIdBothDirInfoFixed = 102
 
 type FileInfo struct {
 	Name           string
@@ -60,4 +67,27 @@ func AppendFileDirInfo(dst []byte, fi FileInfo) (out []byte, entryStart int) {
 
 func SetNextEntryOffset(buf []byte, entryStart, nextEntryStart int) {
 	put32(buf[entryStart:entryStart+4], uint32(nextEntryStart-entryStart))
+}
+
+func AppendFileIdBothDirInfo(dst []byte, fi FileInfo) (out []byte, entryStart int) {
+	name := UTF16ToBytes(fi.Name)
+	entryStart = len(dst)
+	out = append(dst, make([]byte, fileIdBothDirInfoFixed)...)
+	out = append(out, name...)
+	b := out[entryStart:]
+	put32(b[0:4], 0)
+	put32(b[4:8], 0)
+	put64(b[8:16], fi.CreationTime)
+	put64(b[16:24], fi.LastAccessTime)
+	put64(b[24:32], fi.LastWriteTime)
+	put64(b[32:40], fi.ChangeTime)
+	put64(b[40:48], fi.EndOfFile)
+	put64(b[48:56], fi.AllocationSize)
+	put32(b[56:60], fi.FileAttributes)
+	put32(b[60:64], 0)
+	b[64] = 0
+	b[65] = 0
+	put64(b[90:98], 0)
+	put32(b[98:102], uint32(len(name)))
+	return out, entryStart
 }

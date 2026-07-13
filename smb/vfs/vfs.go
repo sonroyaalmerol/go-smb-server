@@ -108,6 +108,11 @@ func (b *LocalBackend) Open(_ context.Context, opts OpenOptions) (Handle, error)
 		if err := os.Mkdir(full, 0o755); err != nil && !os.IsExist(err) {
 			return nil, err
 		}
+		flags &^= os.O_RDWR | os.O_WRONLY
+		flags |= os.O_RDONLY
+	} else if fi, statErr := os.Stat(full); statErr == nil && fi.IsDir() {
+		flags &^= os.O_RDWR | os.O_WRONLY
+		flags |= os.O_RDONLY
 	}
 	f, err := os.OpenFile(full, flags, 0o644)
 	if err != nil {

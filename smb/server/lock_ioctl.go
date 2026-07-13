@@ -111,10 +111,10 @@ func (c *conn) handleIoctl(_ context.Context, msg []byte, tr *tree) uint32 {
 	switch req.CtlCode {
 	case wire.FSCTLValidateNegotiateInfo:
 		resp := buildValidateNegotiateInfo(c.srv.dialect, c.srv.guid)
-		c.out = wire.IoctlResponseAppend(c.out, req.CtlCode, req.FileId, resp)
+		c.out = wire.IoctlResponseAppend(c.out, req.CtlCode, req.FileId, nil, resp, req.Flags)
 		return wire.StatusSuccess
 	case wire.FSCTLQueryNetworkInterfaceInfo:
-		c.out = wire.IoctlResponseAppend(c.out, req.CtlCode, req.FileId, nil)
+		c.out = wire.IoctlResponseAppend(c.out, req.CtlCode, req.FileId, nil, nil, req.Flags)
 		return wire.StatusSuccess
 	default:
 		if tr == nil {

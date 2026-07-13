@@ -524,17 +524,28 @@ func (r *IoctlRequest) Parse(msg []byte) error {
 }
 
 // IoctlResponseAppend writes an IOCTL response carrying out as the output buffer.
-func IoctlResponseAppend(dst []byte, ctlCode uint32, fileId [16]byte, out []byte) []byte {
+func IoctlResponseAppend(dst []byte, ctlCode uint32, fileId [16]byte, in, out []byte, flags uint32) []byte {
 	const fixed = 48
-	total := fixed + len(out)
+	total := fixed + len(in) + len(out)
+	start := len(dst)
 	out2 := append(dst, make([]byte, total)...)
-	b := out2[len(dst):]
+	b := out2[start:]
 	put16(b[0:2], 49)
 	put32(b[4:8], ctlCode)
 	copy(b[8:24], fileId[:])
-	put32(b[24:28], HeaderSize+fixed)
-	put32(b[28:32], uint32(len(out)))
-	copy(b[fixed:], out)
+	if len(in) > 0 {
+		put32(b[24:28], uint32(HeaderSize+fixed))
+		put32(b[28:32], uint32(len(in)))
+		put32(b[32:36], uint32(HeaderSize+fixed+len(in)))
+		put32(b[36:40], uint32(len(out)))
+		copy(b[fixed:], in)
+		copy(b[fixed+len(in):], out)
+	} else if len(out) > 0 {
+		put32(b[32:36], uint32(HeaderSize+fixed))
+		put32(b[36:40], uint32(len(out)))
+		copy(b[fixed:], out)
+	}
+	put32(b[40:44], flags)
 	return out2
 }
 
