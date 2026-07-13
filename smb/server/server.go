@@ -202,6 +202,12 @@ func (s *Server) serveConn(ctx context.Context, c net.Conn) {
 				return
 			}
 			msg = dec
+		} else if len(msg) >= wire.HeaderSize {
+			sessID := binary.LittleEndian.Uint64(msg[40:48])
+			if sess := cn.getSession(sessID); sess != nil && sess.requireEncrypt {
+				cn.log.Debug("plaintext on encrypted session, dropping")
+				return
+			}
 		}
 
 		cn.out = cn.out[:0]

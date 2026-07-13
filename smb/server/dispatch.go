@@ -113,6 +113,13 @@ func (c *conn) handleNegotiate(msg []byte, hdr *wire.Header) uint32 {
 		MaxReadSize:     c.srv.maxRead,
 		MaxWriteSize:    c.srv.maxWrite,
 	}
+	if c.srv.requireEnc && dialect >= wire.DialectSMB30 {
+		resp.Contexts = append(resp.Contexts, wire.NegotiateContext{
+			Type: wire.CtxEncryption,
+			Data: []byte{0x01, 0x00,
+				0x01, 0x00},
+		})
+	}
 	c.out = resp.Append(c.out)
 	return wire.StatusSuccess
 }
