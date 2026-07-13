@@ -1,41 +1,45 @@
-# go-smb-server
+# go-smb-server — Documentation
 
-A from-scratch SMB2/3 server library in Go, built directly from the
-[Microsoft Open Specifications](specs/). The goal: **export a filesystem over
-SMB with pluggable authentication** (e.g. a non-Samba LDAP schema).
-
-This is a library, not a Samba replacement. It provides a clean VFS and auth
-boundary so you can serve any backend (local disk, in-memory, object store,
-custom content store) and authenticate against any credential source.
-
-## Status
-
-Full SMB2/3 file serving — all core commands, signing, and encryption —
-tested against smbclient (Samba 4.24) and the go-smb2 reference client.
+An SMB2/3 server library for Go. Export any filesystem backend over SMB with pluggable authentication. Built from the [Microsoft Open Specifications](../specs/).
 
 ## Quick start
 
 ```go
-backend, _ := vfs.NewLocalBackend("/data/share")
-srv, _ := server.New(
-    server.WithAddr(":445"),
-    server.WithShares(vfs.NewDiskShare("share", backend)),
+package main
+
+import (
+    "context"
+    "log/slog"
+    "os/signal"
+    "syscall"
+
+    "github.com/sonroyaalmerol/go-smb-server/smb/server"
+    "github.com/sonroyaalmerol/go-smb-server/smb/vfs"
 )
-srv.ListenAndServe(ctx)
+
+func main() {
+    backend, _ := vfs.NewLocalBackend("/path/to/share")
+    srv, _ := server.New(
+        server.WithAddr(":445"),
+        server.WithShares(vfs.NewDiskShare("myshare", backend)),
+    )
+    ctx, _ := signal.NotifyContext(context.Background(), syscall.SIGINT)
+    srv.ListenAndServe(ctx)
+}
 ```
 
-A runnable example is at [`examples/localdisk`](examples/localdisk).
+This starts an SMB3 server on port 445 serving `/path/to/share` as `\\server\myshare` with guest (no-op) authentication.
 
-## Documentation
+## Documentation index
 
 | Document | Covers |
 |----------|--------|
-| [Server configuration](docs/server.md) | `server.New()`, options, dialects, credits |
-| [Authentication](docs/auth.md) | `auth.Authenticator`, NTLMSSP, LDAP-backed auth |
-| [Virtual filesystem](docs/vfs.md) | `vfs.Backend`, `vfs.Handle`, local and custom backends |
-| [Encryption & signing](docs/encryption.md) | SMB3 AES-128-CCM, signing algorithms, key derivation |
-| [Protocol support](docs/protocol.md) | Supported commands, dialects, status codes, FSCTLs |
-| [Examples](examples/) | Runnable example servers |
+| [Server configuration](server.md) | `server.New()`, options, dialects, credits |
+| [Authentication](auth.md) | `auth.Authenticator`, NTLMSSP, LDAP-backed auth |
+| [Virtual filesystem](vfs.md) | `vfs.Backend`, `vfs.Handle`, local and custom backends |
+| [Encryption & signing](encryption.md) | SMB3 AES-128-CCM, signing algorithms, key derivation |
+| [Protocol support](protocol.md) | Supported commands, dialects, status codes, FSCTLs |
+| [Examples](../examples/) | Runnable example servers |
 
 ## Architecture
 
@@ -62,7 +66,7 @@ Supporting packages:
   smb/encryption — AES-128-CCM message encryption
 ```
 
-## Design
+## Key design decisions
 
 - **Caller-owned buffers**. Encoding uses `Append(b []byte) []byte` patterns — the caller allocates and the encoder appends. Zero-copy parsing aliases the message buffer.
 - **Pluggable boundaries**. Two interfaces drive all extensibility: `auth.Authenticator` (who can connect) and `vfs.Backend` (what they see).
@@ -72,18 +76,10 @@ Supporting packages:
 
 ## Tested clients
 
-| Client | Auth | Encryption | Operations verified |
-|--------|------|------------|---------------------|
-| `go-smb2` (reference) | NTLMv2 | AES-128-CCM | Full interop |
-| `smbclient` (Samba 4.24) | NTLMv2 | — | ls, get, put, mkdir, rm, rmdir |
-
-## Specs
-
-The `specs/` directory contains the 28 relevant Microsoft Open Specifications,
-indexed by tier in [specs/README.md](specs/README.md). Cite sections as
-`MS-SMB2 §2.2.5`.
-
-## License
-
-Code: MIT. Specs: under Microsoft Open Specifications terms
-(see [specs/SOURCES.md](specs/SOURCES.md)).
+| Client | Auth | Encryption | Status |
+|--------|------|------------|--------|
+| `go-smb2` (reference) | NTLMv2 | AES-128-CCM | ✅ Full interop |
+| `smbclient` (Samba 4.24) | NTLMv2 | — | ✅ ls, get, put, mkdir, rm, rmdir |
+| Windows Explorer | NTLMv2 | AES-128-CCM | ⚠️ Requires DCE/RPC SRVSVC (not yet implemented) |
+| macOS Finder | — | — | Not yet tested |
+| `mount -t cifs` (Linux) | — | — | Not yet tested |
