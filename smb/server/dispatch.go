@@ -65,6 +65,8 @@ func (c *conn) dispatch(ctx context.Context, msg []byte, hdr *wire.Header, lastF
 		return c.handleIoctl(ctx, msg, tr)
 	case wire.CmdEcho:
 		return c.handleEcho(hdr)
+	case wire.CmdOplockBreak:
+		return c.handleOplockBreak(msg)
 	default:
 		return c.errBody(wire.StatusNotImplemented)
 	}
@@ -117,6 +119,14 @@ func (c *conn) handleNegotiate(msg []byte, hdr *wire.Header) uint32 {
 		resp.Contexts = append(resp.Contexts, wire.NegotiateContext{
 			Type: wire.CtxEncryption,
 			Data: []byte{0x01, 0x00,
+				0x01, 0x00},
+		})
+	}
+	if dialect == wire.DialectSMB311 {
+		resp.Contexts = append(resp.Contexts, wire.NegotiateContext{
+			Type: wire.CtxPreauthIntegrity,
+			Data: []byte{0x01, 0x00,
+				0x00, 0x00,
 				0x01, 0x00},
 		})
 	}
@@ -293,8 +303,23 @@ func (c *conn) handleCreate(ctx context.Context, msg []byte, hdr *wire.Header, t
 		action = wire.FileOverwritten
 	}
 
+	var oplock uint8
+	if req.RequestedOplockLevel != 0 {
+		if tr.oplocks == nil {
+			tr.oplocks = newOplockTable()
+		}
+		info := &oplockInfo{fileId: fid, sessID: hdr.SessionId, treeID: hdr.TreeId, path: name}
+		if tr.oplocks.grant(name, info) {
+			oplock = req.RequestedOplockLevel
+		} else {
+			if broken := tr.oplocks.breakOplock(name); broken != nil {
+				c.sendOplockBreak(broken)
+			}
+		}
+	}
+
 	resp := wire.CreateResponse{
-		OplockLevel:    0,
+		OplockLevel:    oplock,
 		CreateAction:   action,
 		CreationTime:   wire.TimeToFiletime(fi.CreationTime),
 		LastAccessTime: wire.TimeToFiletime(fi.LastAccess),
@@ -330,6 +355,9 @@ func (c *conn) handleClose(ctx context.Context, msg []byte, tr *tree) uint32 {
 		return c.errBody(osErrToStatus(err))
 	}
 	delete(tr.opens, req.FileId)
+	if tr.oplocks != nil {
+		tr.oplocks.release(oh.path)
+	}
 
 	if oh.deletePending {
 		if rm, ok := tr.share.Backend().(vfs.Remover); ok {

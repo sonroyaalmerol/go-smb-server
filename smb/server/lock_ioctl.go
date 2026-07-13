@@ -116,6 +116,9 @@ func (c *conn) handleIoctl(_ context.Context, msg []byte, tr *tree) uint32 {
 	case wire.FSCTLQueryNetworkInterfaceInfo:
 		c.out = wire.IoctlResponseAppend(c.out, req.CtlCode, req.FileId, nil, nil, req.Flags)
 		return wire.StatusSuccess
+	case wire.FSCTLPipeWait:
+		c.out = wire.IoctlResponseAppend(c.out, req.CtlCode, req.FileId, nil, nil, req.Flags)
+		return wire.StatusSuccess
 	default:
 		if tr == nil {
 			return c.errBody(wire.StatusInvalidDeviceRequest)

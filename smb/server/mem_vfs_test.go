@@ -134,6 +134,41 @@ func (h *memHandle) Write(_ context.Context, offset int64, p []byte) (int, error
 
 func (h *memHandle) Close(_ context.Context) error { return nil }
 
+func (h *memHandle) SetInfo(_ context.Context, req *vfs.SetInfoRequest) error {
+	h.b.mu.Lock()
+	defer h.b.mu.Unlock()
+	if req.EndOfFile != nil {
+		if *req.EndOfFile < int64(len(h.n.data)) {
+			h.n.data = h.n.data[:int(*req.EndOfFile)]
+		}
+	}
+	if req.CreationTime != nil {
+		h.n.modTime = *req.CreationTime
+	}
+	if req.LastWriteTime != nil {
+		h.n.modTime = *req.LastWriteTime
+	}
+	return nil
+}
+
+func (h *memHandle) Rename(_ context.Context, newPath string, replaceIfExists bool) error {
+	h.b.mu.Lock()
+	defer h.b.mu.Unlock()
+	clean := path.Clean("/" + newPath)
+	dir, base := splitDir(clean)
+	parent := h.b.mustDir(dir)
+	if !replaceIfExists {
+		if _, ok := parent.children[base]; ok {
+			return fs.ErrExist
+		}
+	}
+	n := h.n
+	delete(parent.children, n.name)
+	n.name = base
+	parent.children[base] = n
+	return nil
+}
+
 func (h *memHandle) Stat(_ context.Context) (vfs.FileInfo, error) {
 	h.b.mu.Lock()
 	defer h.b.mu.Unlock()

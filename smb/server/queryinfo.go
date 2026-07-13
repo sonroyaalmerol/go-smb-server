@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 
+	"github.com/sonroyaalmerol/go-smb-server/smb/vfs"
 	"github.com/sonroyaalmerol/go-smb-server/smb/wire"
 )
 
@@ -73,24 +74,13 @@ func (c *conn) handleQueryInfo(ctx context.Context, msg []byte, tr *tree) uint32
 
 func networkOpenInfo(basic wire.FileBasicInformation, size int64) []byte {
 	out := make([]byte, 56)
-	var u64 [8]byte
-	var u32 [4]byte
-	put := func(off int, v uint64) {
-		for i := range 8 {
-			out[off+i] = byte(v >> (8 * i))
-		}
-		_ = u64
-	}
-	_ = u32
-	put(0, basic.CreationTime)
-	put(8, basic.LastAccessTime)
-	put(16, basic.LastWriteTime)
-	put(24, basic.ChangeTime)
-	put(32, uint64(size))
-	put(40, uint64(size))
-	for i := range 4 {
-		out[48+i] = byte(basic.FileAttributes >> (8 * i))
-	}
+	putLE64(out[0:8], basic.CreationTime)
+	putLE64(out[8:16], basic.LastAccessTime)
+	putLE64(out[16:24], basic.LastWriteTime)
+	putLE64(out[24:32], basic.ChangeTime)
+	putLE64(out[32:40], uint64(size))
+	putLE64(out[40:48], uint64(size))
+	out[48], out[49], out[50], out[51] = byte(basic.FileAttributes), byte(basic.FileAttributes>>8), byte(basic.FileAttributes>>16), byte(basic.FileAttributes>>24)
 	return out
 }
 
@@ -102,7 +92,6 @@ func (c *conn) filesystemInfo(class uint8) []byte {
 		out[0] = 0x05
 		out[2] = 0x02
 		out[4] = byte(len(name))
-		out[5] = 0
 		for i := range 4 {
 			out[8+i] = byte(uint32(len(name)) >> (8 * i))
 		}
@@ -146,17 +135,67 @@ func (c *conn) handleSetInfo(ctx context.Context, msg []byte, tr *tree) uint32 {
 				return c.errBody(wire.StatusInvalidParameter)
 			}
 			oh.deletePending = req.Buffer[0] != 0
+
 		case wire.FileBasicInfoClass:
 			var bi wire.FileBasicInformation
 			if err := bi.Parse(req.Buffer); err != nil {
 				return c.errBody(wire.StatusInvalidParameter)
 			}
-			_ = bi
+			if si, ok := oh.h.(vfs.SetInfoer); ok {
+				var req vfs.SetInfoRequest
+				if bi.CreationTime != 0 {
+					t := wire.FiletimeToTime(bi.CreationTime)
+					req.CreationTime = &t
+				}
+				if bi.LastAccessTime != 0 {
+					t := wire.FiletimeToTime(bi.LastAccessTime)
+					req.LastAccessTime = &t
+				}
+				if bi.LastWriteTime != 0 {
+					t := wire.FiletimeToTime(bi.LastWriteTime)
+					req.LastWriteTime = &t
+				}
+				if bi.ChangeTime != 0 {
+					t := wire.FiletimeToTime(bi.ChangeTime)
+					req.ChangeTime = &t
+				}
+				if bi.FileAttributes != 0 {
+					req.Attributes = &bi.FileAttributes
+				}
+				if err := si.SetInfo(ctx, &req); err != nil {
+					return c.errBody(osErrToStatus(err))
+				}
+			}
+
 		case wire.FileEndOfFileInformation:
 			if len(req.Buffer) < 8 {
 				return c.errBody(wire.StatusInvalidParameter)
 			}
-			_ = req.Buffer
+			newSize := readLE64(req.Buffer[0:8])
+			if si, ok := oh.h.(vfs.SetInfoer); ok {
+				if err := si.SetInfo(ctx, &vfs.SetInfoRequest{EndOfFile: &newSize}); err != nil {
+					return c.errBody(osErrToStatus(err))
+				}
+			}
+
+		case wire.FileRenameInformation:
+			if len(req.Buffer) < 20 {
+				return c.errBody(wire.StatusInvalidParameter)
+			}
+			replaceIfExist := req.Buffer[0] != 0
+			fnLen := le32(req.Buffer[16:20])
+			if int(20+fnLen) > len(req.Buffer) {
+				return c.errBody(wire.StatusInvalidParameter)
+			}
+			newName := wire.UTF16FromBytes(req.Buffer[20 : 20+fnLen])
+			if rn, ok := oh.h.(vfs.Renamer); ok {
+				if err := rn.Rename(ctx, newName, replaceIfExist); err != nil {
+					return c.errBody(osErrToStatus(err))
+				}
+			} else {
+				return c.errBody(wire.StatusNotSupported)
+			}
+
 		default:
 			return c.errBody(wire.StatusNotSupported)
 		}
@@ -183,4 +222,15 @@ func put64LE(dst []byte, v uint64) {
 	for i := range 8 {
 		dst[i] = byte(v >> (8 * i))
 	}
+}
+
+func putLE64(dst []byte, v uint64) {
+	for i := range 8 {
+		dst[i] = byte(v >> (8 * i))
+	}
+}
+
+func readLE64(b []byte) int64 {
+	return int64(uint64(b[0]) | uint64(b[1])<<8 | uint64(b[2])<<16 | uint64(b[3])<<24 |
+		uint64(b[4])<<32 | uint64(b[5])<<40 | uint64(b[6])<<48 | uint64(b[7])<<56)
 }

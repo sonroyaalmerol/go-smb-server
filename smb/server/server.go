@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha512"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -145,10 +146,11 @@ type session struct {
 }
 
 type tree struct {
-	share  vfs.Share
-	opens  map[[16]byte]*openHandle
-	nextID uint64
-	locks  *lockMgrSet
+	share   vfs.Share
+	opens   map[[16]byte]*openHandle
+	nextID  uint64
+	locks   *lockMgrSet
+	oplocks *oplockTable
 }
 
 type openHandle struct {
@@ -174,10 +176,14 @@ type conn struct {
 	pendingByMsg map[uint64]*pendingOp
 	pendingMu    sync.Mutex
 	asyncResp    chan []byte
+
+	preauthHash []byte
 }
 
 func (s *Server) serveConn(ctx context.Context, c net.Conn) {
 	defer c.Close()
+	sha := sha512.New()
+	sha.Write(nil)
 	cn := &conn{
 		srv:           s,
 		fc:            transport.NewFramedConn(c),
@@ -187,6 +193,7 @@ func (s *Server) serveConn(ctx context.Context, c net.Conn) {
 		pending:       make(map[uint64]*pendingOp),
 		pendingByMsg:  make(map[uint64]*pendingOp),
 		asyncResp:     make(chan []byte, 64),
+		preauthHash:   sha.Sum(nil),
 	}
 
 	for {
@@ -225,6 +232,13 @@ func (s *Server) serveConn(ctx context.Context, c net.Conn) {
 		}
 
 		cn.out = cn.out[:0]
+		cmd := uint16(0)
+		if len(msg) >= wire.HeaderSize {
+			cmd = binary.LittleEndian.Uint16(msg[12:14])
+		}
+		if cmd == wire.CmdNegotiate || cmd == wire.CmdSessionSetup {
+			cn.updatePreauth(msg)
+		}
 		cn.handleMessage(ctx, msg)
 		if len(cn.out) > 0 {
 			if sealed, ok := cn.maybeSealResponse(cn.out); ok {
@@ -355,6 +369,10 @@ func (c *conn) handleMessage(ctx context.Context, msg []byte) {
 		hdr.Status = status
 		hdr.EncodeAt(c.out[respStart:])
 
+		if hdr.Command == wire.CmdNegotiate || hdr.Command == wire.CmdSessionSetup {
+			c.updatePreauth(c.out[respStart:])
+		}
+
 		if sess := c.getSession(hdr.SessionId); sess != nil && sess.signingKey != nil {
 			encrypting := sess.requireEncrypt && hdr.Command != wire.CmdNegotiate && hdr.Command != wire.CmdSessionSetup
 			if !encrypting {
@@ -388,5 +406,15 @@ func fileIdOffset(cmd uint16) int {
 }
 
 func (c *conn) getSession(id uint64) *session { return c.sessions[id] }
+
+func (c *conn) updatePreauth(msg []byte) {
+	if len(c.preauthHash) == 0 {
+		return
+	}
+	sha := sha512.New()
+	sha.Write(c.preauthHash)
+	sha.Write(msg)
+	c.preauthHash = sha.Sum(nil)
+}
 
 func (s *session) getTree(id uint32) *tree { return s.trees[id] }

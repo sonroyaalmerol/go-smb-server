@@ -25,8 +25,7 @@ func NewDiskShare(name string, backend Backend) DiskShare {
 	return DiskShare{name: name, backend: backend}
 }
 
-func (s DiskShare) Name() string { return s.name }
-
+func (s DiskShare) Name() string     { return s.name }
 func (s DiskShare) Backend() Backend { return s.backend }
 
 const (
@@ -72,6 +71,31 @@ type Remover interface {
 	Remove(ctx context.Context, path string) error
 }
 
+type SetInfoer interface {
+	SetInfo(ctx context.Context, info *SetInfoRequest) error
+}
+
+type SetInfoRequest struct {
+	CreationTime   *time.Time
+	LastAccessTime *time.Time
+	LastWriteTime  *time.Time
+	ChangeTime     *time.Time
+	Attributes     *uint32
+	EndOfFile      *int64
+}
+
+type Renamer interface {
+	Rename(ctx context.Context, newPath string, replaceIfExists bool) error
+}
+
+type Mkdirer interface {
+	Mkdir(ctx context.Context, path string) error
+}
+
+type Copier interface {
+	CopyChunk(ctx context.Context, srcPath string, srcOffset, dstOffset, length int64) error
+}
+
 type LocalBackend struct {
 	Root string
 }
@@ -84,21 +108,64 @@ func NewLocalBackend(root string) (*LocalBackend, error) {
 	return &LocalBackend{Root: abs}, nil
 }
 
-func (b *LocalBackend) Remove(_ context.Context, p string) error {
+func (b *LocalBackend) fullPath(p string) string {
 	clean := path.Clean("/" + p)
 	if clean == "/" {
 		clean = ""
 	}
-	full := filepath.Join(b.Root, filepath.FromSlash(clean))
-	return os.RemoveAll(full)
+	return filepath.Join(b.Root, filepath.FromSlash(clean))
+}
+
+func (b *LocalBackend) Remove(_ context.Context, p string) error {
+	return os.RemoveAll(b.fullPath(p))
+}
+
+func (b *LocalBackend) Mkdir(_ context.Context, p string) error {
+	return os.MkdirAll(b.fullPath(p), 0o755)
+}
+
+func (b *LocalBackend) CopyChunk(_ context.Context, srcPath string, srcOffset, dstOffset, length int64) error {
+	srcFull := b.fullPath(srcPath)
+	dstFull := b.fullPath(srcPath)
+	src, err := os.Open(srcFull)
+	if err != nil {
+		return err
+	}
+	defer src.Close()
+	dst, err := os.OpenFile(dstFull, os.O_WRONLY, 0)
+	if err != nil {
+		return err
+	}
+	defer dst.Close()
+	buf := make([]byte, 65536)
+	remaining := length
+	for remaining > 0 {
+		chunk := buf
+		if remaining < int64(len(buf)) {
+			chunk = buf[:remaining]
+		}
+		nr, re := src.ReadAt(chunk, srcOffset)
+		if nr > 0 {
+			_, we := dst.WriteAt(chunk[:nr], dstOffset)
+			if we != nil {
+				return we
+			}
+			srcOffset += int64(nr)
+			dstOffset += int64(nr)
+			remaining -= int64(nr)
+		}
+		if re != nil {
+			return re
+		}
+		if nr == 0 {
+			break
+		}
+	}
+	return nil
 }
 
 func (b *LocalBackend) Open(_ context.Context, opts OpenOptions) (Handle, error) {
-	clean := path.Clean("/" + opts.Path)
-	if clean == "/" {
-		clean = ""
-	}
-	full := filepath.Join(b.Root, filepath.FromSlash(clean))
+	full := b.fullPath(opts.Path)
 	if full == b.Root {
 		full = filepath.Join(b.Root, ".")
 	}
@@ -118,7 +185,7 @@ func (b *LocalBackend) Open(_ context.Context, opts OpenOptions) (Handle, error)
 	if err != nil {
 		return nil, err
 	}
-	return &localHandle{f: f, name: filepath.Base(full)}, nil
+	return &localHandle{f: f, path: full, name: filepath.Base(full)}, nil
 }
 
 func getFlags(disp uint32, appendFile bool) int {
@@ -139,6 +206,7 @@ func getFlags(disp uint32, appendFile bool) int {
 
 type localHandle struct {
 	f    *os.File
+	path string
 	name string
 }
 
@@ -158,6 +226,47 @@ func (h *localHandle) Stat(_ context.Context) (FileInfo, error) {
 		return FileInfo{}, err
 	}
 	return statToFileInfo(h.name, fi), nil
+}
+
+func (h *localHandle) SetInfo(_ context.Context, req *SetInfoRequest) error {
+	if req.EndOfFile != nil {
+		if err := h.f.Truncate(*req.EndOfFile); err != nil {
+			return err
+		}
+	}
+	if req.CreationTime != nil || req.LastAccessTime != nil || req.LastWriteTime != nil {
+		atime := time.Now()
+		mtime := time.Now()
+		if fi, err := h.f.Stat(); err == nil {
+			atime = accessTime(fi)
+			mtime = fi.ModTime()
+		}
+		if req.LastAccessTime != nil {
+			atime = *req.LastAccessTime
+		}
+		if req.LastWriteTime != nil {
+			mtime = *req.LastWriteTime
+		}
+		if err := os.Chtimes(h.path, atime, mtime); err != nil {
+			return err
+		}
+	}
+	if req.Attributes != nil && *req.Attributes&0x02 != 0 {
+		if err := os.Chmod(h.path, 0400); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (h *localHandle) Rename(_ context.Context, newPath string, replaceIfExists bool) error {
+	newFull := filepath.Join(filepath.Dir(h.path), filepath.Base(filepath.FromSlash(newPath)))
+	if !replaceIfExists {
+		if _, err := os.Stat(newFull); err == nil {
+			return os.ErrExist
+		}
+	}
+	return os.Rename(h.path, newFull)
 }
 
 func (h *localHandle) Enumerate(_ context.Context, pattern string) iter.Seq2[FileInfo, error] {
@@ -187,6 +296,10 @@ func (h *localHandle) Enumerate(_ context.Context, pattern string) iter.Seq2[Fil
 			}
 		}
 	}
+}
+
+func accessTime(fi fs.FileInfo) time.Time {
+	return fi.ModTime()
 }
 
 func statToFileInfo(name string, fi fs.FileInfo) FileInfo {

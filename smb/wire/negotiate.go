@@ -58,11 +58,14 @@ func (r *NegotiateRequest) Parse(body []byte) error {
 	}
 
 	r.Contexts = r.Contexts[:0]
-	ctxOff := int(binary.LittleEndian.Uint32(body[28:32])) - HeaderSize
-	ctxCount := int(binary.LittleEndian.Uint16(body[32:34]))
-	if ctxOff > 0 && ctxCount > 0 && ctxOff+8 <= len(body) {
-		if err := r.parseContexts(body, ctxOff, ctxCount); err != nil {
-			return err
+	for _, d := range r.Dialects {
+		if d == DialectSMB311 {
+			ctxOff := int(binary.LittleEndian.Uint32(body[28:32])) - HeaderSize
+			ctxCount := int(binary.LittleEndian.Uint16(body[32:34]))
+			if err := r.parseContexts(body, ctxOff, ctxCount); err != nil {
+				return err
+			}
+			break
 		}
 	}
 	return nil
@@ -107,7 +110,7 @@ func (r *NegotiateResponse) Append(dst []byte) []byte {
 	total := bodyFixed + secLen
 
 	var secPad int
-	if r.DialectRevision >= DialectSMB30 {
+	if r.DialectRevision == DialectSMB311 {
 		secPad = (-total) & 7
 		total += secPad
 		for _, c := range r.Contexts {
@@ -136,7 +139,7 @@ func (r *NegotiateResponse) Append(dst []byte) []byte {
 	put16(b[58:60], uint16(secLen))
 	copy(b[bodyFixed:bodyFixed+secLen], r.SecurityBuffer)
 
-	if r.DialectRevision >= DialectSMB30 {
+	if r.DialectRevision == DialectSMB311 {
 		ctxOff := HeaderSize + bodyFixed + secLen + secPad
 		put32(b[60:64], uint32(ctxOff))
 
