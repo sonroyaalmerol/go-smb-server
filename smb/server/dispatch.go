@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/sonroyaalmerol/go-smb-server/smb/auth"
+	"github.com/sonroyaalmerol/go-smb-server/smb/signing"
 	"github.com/sonroyaalmerol/go-smb-server/smb/vfs"
 	"github.com/sonroyaalmerol/go-smb-server/smb/wire"
 )
@@ -162,7 +163,8 @@ func (c *conn) handleSessionSetup(ctx context.Context, msg []byte, hdr *wire.Hea
 	if result.Identity != nil {
 		sess.identity = result.Identity
 		sess.authenticated = true
-		sess.signingKey = result.SessionKey
+		sess.signingKey = signing.DeriveSigningKey(result.SessionKey)
+		sess.signingAlgo = signing.AlgoAESCMAC
 	}
 	c.out = ssr.Append(c.out)
 	if sess.authenticated {
@@ -351,6 +353,9 @@ func (c *conn) handleRead(ctx context.Context, msg []byte, tr *tree) uint32 {
 	if err != nil && !errors.Is(err, errEOF) {
 		return c.errBody(osErrToStatus(err))
 	}
+	if n == 0 {
+		return c.errBody(wire.StatusEndOfFile)
+	}
 	c.out = wire.ReadResponseAppend(c.out, buf[:n])
 	return wire.StatusSuccess
 }
@@ -381,6 +386,16 @@ func (c *conn) handleQueryDirectory(ctx context.Context, msg []byte, tr *tree) u
 	if !ok {
 		return c.errBody(wire.StatusInvalidHandle)
 	}
+
+	if req.Flags&(wire.QueryDirRestartScans|wire.QueryDirReopen) != 0 {
+		oh.enumDone = false
+	}
+	oh.enumMu.Lock()
+	defer oh.enumMu.Unlock()
+	if oh.enumDone {
+		return c.errBody(wire.StatusNoMoreFiles)
+	}
+
 	pattern := wire.UTF16FromBytes(req.FileName)
 	if pattern == "" {
 		pattern = "*"
@@ -432,6 +447,7 @@ func (c *conn) handleQueryDirectory(ctx context.Context, msg []byte, tr *tree) u
 	binary.LittleEndian.PutUint16(c.out[bodyStart:bodyStart+2], 9)
 	binary.LittleEndian.PutUint16(c.out[bodyStart+2:bodyStart+4], uint16(bufStart))
 	binary.LittleEndian.PutUint32(c.out[bodyStart+4:bodyStart+8], uint32(bufLen))
+	oh.enumDone = true
 	return wire.StatusSuccess
 }
 

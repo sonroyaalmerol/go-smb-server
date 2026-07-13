@@ -60,7 +60,7 @@ func (r *NegotiateRequest) Parse(body []byte) error {
 	r.Contexts = r.Contexts[:0]
 	for _, d := range r.Dialects {
 		if d == DialectSMB311 {
-			ctxOff := int(binary.LittleEndian.Uint32(body[28:32]))
+			ctxOff := int(binary.LittleEndian.Uint32(body[28:32])) - HeaderSize
 			ctxCount := int(binary.LittleEndian.Uint16(body[32:34]))
 			if err := r.parseContexts(body, ctxOff, ctxCount); err != nil {
 				return err
@@ -73,7 +73,7 @@ func (r *NegotiateRequest) Parse(body []byte) error {
 
 func (r *NegotiateRequest) parseContexts(body []byte, offset, count int) error {
 	for range count {
-		if offset+8 > len(body) {
+		if offset < 0 || offset+8 > len(body) {
 			return errors.New("wire: negotiate context header truncated")
 		}
 		ctxType := binary.LittleEndian.Uint16(body[offset : offset+2])

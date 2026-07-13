@@ -24,9 +24,9 @@ func (r *SessionSetupRequest) Parse(msg []byte) error {
 	r.Flags = msg[body+2]
 	r.SecurityMode = msg[body+3]
 	r.Capabilities = binary.LittleEndian.Uint32(msg[body+4 : body+8])
+	secOff := int(binary.LittleEndian.Uint16(msg[body+12 : body+14]))
+	secLen := int(binary.LittleEndian.Uint16(msg[body+14 : body+16]))
 	r.PreviousSessionId = binary.LittleEndian.Uint64(msg[body+16 : body+24])
-	secOff := int(binary.LittleEndian.Uint16(msg[body+8 : body+10]))
-	secLen := int(binary.LittleEndian.Uint16(msg[body+10 : body+12]))
 	if secOff+secLen > len(msg) {
 		return fmt.Errorf("wire: session_setup security buffer out of range (%d:%d, msg=%d)", secOff, secLen, len(msg))
 	}

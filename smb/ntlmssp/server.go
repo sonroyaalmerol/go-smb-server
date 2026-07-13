@@ -65,6 +65,7 @@ func (s *ServerAuthenticator) handleNegotiate(msg []byte) (auth.AcceptResult, er
 		Flags:           serverChallengeFlags,
 		ServerChallenge: s.challenge,
 		TargetName:      s.targetName,
+		TargetInfo:      buildTargetInfo(s.targetName),
 	}
 	body, err := resp.Marshal()
 	if err != nil {
@@ -110,4 +111,37 @@ func (s *ServerAuthenticator) handleAuthenticate(ctx context.Context, msg []byte
 		Domain:   s.domain,
 	}
 	return auth.AcceptResult{Identity: ident, SessionKey: sessionKey}, nil
+}
+
+// AV_PAIR attribute IDs (MS-NLMP section 2.2.2.1).
+const (
+	avEOL        uint16 = 0x00
+	avNbCompName uint16 = 0x01
+	avNbDomName  uint16 = 0x02
+	avDnsComp    uint16 = 0x03
+	avDnsDom     uint16 = 0x04
+	avTimestamp  uint16 = 0x07
+)
+
+// buildTargetInfo constructs the CHALLENGE_MESSAGE TargetInfo payload: a list
+// of AV_PAIRs the client folds into its NTLMv2 response, terminated by
+// MsvAvEOL. We include the server (NetBIOS computer) name so the client can
+// compute a conformant response.
+func buildTargetInfo(serverName string) []byte {
+	if serverName == "" {
+		// Minimal valid TargetInfo: just the terminator.
+		return []byte{0x00, 0x00, 0x00, 0x00}
+	}
+	name := []byte(toUTF16LE(serverName))
+	var out []byte
+	out = appendAV(out, avNbCompName, name)
+	out = appendAV(out, avEOL, nil)
+	return out
+}
+
+// appendAV encodes one AV_PAIR: AvId(2) + AvLen(2) + Value.
+func appendAV(out []byte, id uint16, value []byte) []byte {
+	out = append(out, byte(id), byte(id>>8))
+	out = append(out, byte(len(value)), byte(len(value)>>8))
+	return append(out, value...)
 }

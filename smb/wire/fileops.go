@@ -247,7 +247,12 @@ func (r *QueryDirectoryRequest) Parse(msg []byte) error {
 	return nil
 }
 
-// --- QUERY_INFO / SET_INFO / FLUSH (sections 2.2.37/2.2.39/2.2.17) ----------
+const (
+	QueryDirRestartScans   uint8 = 0x01
+	QueryDirReturnSingle   uint8 = 0x02
+	QueryDirIndexSpecified uint8 = 0x04
+	QueryDirReopen         uint8 = 0x10
+)
 
 // InfoType values (MS-SMB2 section 2.2.37).
 const (

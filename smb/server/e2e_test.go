@@ -6,8 +6,9 @@ import (
 	"io"
 	"log/slog"
 	"net"
-	"time"
+
 	"testing"
+	"time"
 
 	"github.com/sonroyaalmerol/go-smb-server/smb/auth"
 	"github.com/sonroyaalmerol/go-smb-server/smb/transport"

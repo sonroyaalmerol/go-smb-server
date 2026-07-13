@@ -120,6 +120,7 @@ type session struct {
 	trees         map[uint32]*tree
 	nextTreeID    uint32
 	signingKey    []byte
+	signingAlgo   signing.Algorithm
 	requireSign   bool
 }
 
@@ -135,6 +136,8 @@ type openHandle struct {
 	fileId        [16]byte
 	path          string
 	deletePending bool
+	enumDone      bool
+	enumMu        sync.Mutex
 }
 
 type conn struct {
@@ -241,7 +244,7 @@ func (c *conn) handleMessage(ctx context.Context, msg []byte) {
 
 		if sess := c.getSession(hdr.SessionId); sess != nil && sess.signingKey != nil {
 			if hdr.Flags&wire.FlagSigned != 0 {
-				ok, vErr := signing.Verify(sub, sess.signingKey, signing.AlgoAESCMAC)
+				ok, vErr := signing.Verify(sub, sess.signingKey, sess.signingAlgo)
 				if vErr != nil || !ok {
 					chainFailed = true
 					lastStatus = wire.StatusAccessDenied
@@ -313,9 +316,9 @@ func (c *conn) handleMessage(ctx context.Context, msg []byte) {
 		hdr.Status = status
 		hdr.EncodeAt(c.out[respStart:])
 
-		if sess := c.getSession(hdr.SessionId); sess != nil && sess.signingKey != nil && !chainFailed {
+		if sess := c.getSession(hdr.SessionId); sess != nil && sess.signingKey != nil {
 			subResp := c.out[respStart:]
-			if err := signing.Sign(subResp, sess.signingKey, signing.AlgoAESCMAC); err != nil {
+			if err := signing.Sign(subResp, sess.signingKey, sess.signingAlgo); err != nil {
 				c.log.Debug("sign response failed", "err", err)
 			} else {
 				hdr.Flags |= wire.FlagSigned

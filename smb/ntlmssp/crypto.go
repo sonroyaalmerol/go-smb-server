@@ -28,6 +28,7 @@ const (
 	FlagNegotiateNTLM        uint32 = 0x00000200
 	FlagNegotiateAlwaysSign  uint32 = 0x00008000
 	FlagNegotiateExtSecurity uint32 = 0x00080000
+	FlagNegotiateTargetInfo  uint32 = 0x00800000
 	FlagTargetTypeDomain     uint32 = 0x00010000
 	FlagTargetTypeServer     uint32 = 0x00020000
 	FlagTargetTypeShare      uint32 = 0x00040000
@@ -43,6 +44,7 @@ const serverChallengeFlags = FlagNegotiateUnicode |
 	FlagNegotiateSign |
 	FlagNegotiateAlwaysSign |
 	FlagNegotiateExtSecurity |
+	FlagNegotiateTargetInfo |
 	FlagNegotiate128 |
 	FlagNegotiateVersion |
 	FlagTargetTypeServer

@@ -132,3 +132,22 @@ func cmacPad(b []byte) [16]byte {
 	out[len(b)] = 0x80
 	return out
 }
+
+// DeriveSigningKey computes the SMB 3.x signing key from the session key using
+// the SP800-108 KDF in Counter Mode (MS-SMB2 section 3.1.4.2): HMAC-SHA256 with
+// label "SMB2AESCMAC\0" and context "SmbSign\0", returning the first 16 bytes.
+func DeriveSigningKey(sessionKey []byte) []byte {
+	return kdfCounter(sessionKey, []byte("SMB2AESCMAC\x00"), []byte("SmbSign\x00"))
+}
+
+// kdfCounter implements NIST SP 800-108 5.1 in Counter Mode with h=256, r=32,
+// L=128 (label/context per MS-SMB2 section 3.1.4.2).
+func kdfCounter(ki, label, context []byte) []byte {
+	mac := hmac.New(sha256.New, ki)
+	mac.Write([]byte{0x00, 0x00, 0x00, 0x01}) // counter = 1
+	mac.Write(label)
+	mac.Write([]byte{0x00})
+	mac.Write(context)
+	mac.Write([]byte{0x00, 0x00, 0x00, 0x80}) // L = 128 bits
+	return mac.Sum(nil)[:16]
+}
