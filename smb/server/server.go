@@ -20,6 +20,7 @@ const (
 	defaultMaxTransact uint32 = 65536
 	defaultMaxRead     uint32 = 1 << 20
 	defaultMaxWrite    uint32 = 1 << 20
+	defaultMaxCredits  uint32 = 8192
 )
 
 type Server struct {
@@ -31,6 +32,7 @@ type Server struct {
 	maxTransact uint32
 	maxRead     uint32
 	maxWrite    uint32
+	maxCredits  uint32
 	log         *slog.Logger
 	guid        [16]byte
 }
@@ -47,6 +49,8 @@ func WithShares(shares ...vfs.Share) Option {
 
 func WithLogger(l *slog.Logger) Option { return func(s *Server) { s.log = l } }
 
+func WithMaxCredits(n uint32) Option { return func(s *Server) { s.maxCredits = n } }
+
 func WithDialect(d uint16) Option { return func(s *Server) { s.dialect = d } }
 
 func New(opts ...Option) (*Server, error) {
@@ -56,6 +60,7 @@ func New(opts ...Option) (*Server, error) {
 		maxTransact: defaultMaxTransact,
 		maxRead:     defaultMaxRead,
 		maxWrite:    defaultMaxWrite,
+		maxCredits:  defaultMaxCredits,
 		log:         slog.Default(),
 	}
 	for _, opt := range opts {
@@ -126,21 +131,23 @@ type openHandle struct {
 }
 
 type conn struct {
-	srv      *Server
-	fc       *transport.FramedConn
-	log      *slog.Logger
-	out      []byte
-	sessions map[uint64]*session
-	nextSess uint64
+	srv           *Server
+	fc            *transport.FramedConn
+	log           *slog.Logger
+	out           []byte
+	sessions      map[uint64]*session
+	nextSess      uint64
+	creditBalance uint32
 }
 
 func (s *Server) serveConn(ctx context.Context, c net.Conn) {
 	defer c.Close()
 	cn := &conn{
-		srv:      s,
-		fc:       transport.NewFramedConn(c),
-		log:      s.log,
-		sessions: make(map[uint64]*session),
+		srv:           s,
+		fc:            transport.NewFramedConn(c),
+		log:           s.log,
+		sessions:      make(map[uint64]*session),
+		creditBalance: 1,
 	}
 
 	for {
@@ -187,6 +194,13 @@ func (c *conn) handleMessage(ctx context.Context, msg []byte) {
 			}
 		}
 
+		charge := uint32(hdr.CreditCharge)
+		if c.creditBalance >= charge {
+			c.creditBalance -= charge
+		} else {
+			c.creditBalance = 0
+		}
+
 		if prevRespStart >= 0 {
 			for len(c.out)%8 != 0 {
 				c.out = append(c.out, 0)
@@ -205,9 +219,16 @@ func (c *conn) handleMessage(ctx context.Context, msg []byte) {
 			status = c.dispatch(ctx, sub, &hdr, &lastFileId, related)
 		}
 		lastStatus = status
-		c.log.Info("dispatched", "cmd", hdr.Command, "status", status, "sess", hdr.SessionId, "tree", hdr.TreeId)
 		if status != wire.StatusSuccess && status != wire.StatusMoreProcessingRequired {
 			chainFailed = true
+		}
+
+		grant := c.srv.maxCredits - c.creditBalance
+		c.creditBalance += grant
+		if grant > 0xFFFF {
+			hdr.Credit = 0xFFFF
+		} else {
+			hdr.Credit = uint16(grant)
 		}
 
 		hdr.Flags |= wire.FlagServerToRedir
