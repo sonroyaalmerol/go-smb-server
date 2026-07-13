@@ -14,10 +14,10 @@ func (c *conn) openTransform(transform []byte) ([]byte, error) {
 	}
 	sessID := binary.LittleEndian.Uint64(transform[44:52])
 	sess := c.getSession(sessID)
-	if sess == nil || sess.encryptionKey == nil {
-		return nil, errors.New("server: no encryption key for session")
+	if sess == nil || sess.decryptionKey == nil {
+		return nil, errors.New("server: no decryption key for session")
 	}
-	ccm, err := encryption.NewAESCCM(encryption.DeriveServerDecryptionKey(sess.encryptionKey))
+	ccm, err := encryption.NewAESCCM(sess.decryptionKey)
 	if err != nil {
 		return nil, err
 	}
@@ -26,6 +26,10 @@ func (c *conn) openTransform(transform []byte) ([]byte, error) {
 
 func (c *conn) maybeSealResponse(out []byte) ([]byte, bool) {
 	if len(out) < wire.HeaderSize {
+		return nil, false
+	}
+	cmd := binary.LittleEndian.Uint16(out[12:14])
+	if cmd == wire.CmdNegotiate || cmd == wire.CmdSessionSetup {
 		return nil, false
 	}
 	sessID := binary.LittleEndian.Uint64(out[40:48])

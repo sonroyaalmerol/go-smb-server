@@ -42,7 +42,7 @@ func (c *AESCCM) Seal(msg []byte, sessionID uint64) ([]byte, error) {
 	binary.LittleEndian.PutUint16(header[42:44], 0x0001)
 	binary.LittleEndian.PutUint64(header[44:52], sessionID)
 
-	ct, tag := ccmEncrypt(c.block, ccmNonce, header[4:TransformHeaderSize], msg)
+	ct, tag := ccmEncrypt(c.block, ccmNonce, header[20:TransformHeaderSize], msg)
 	copy(header[4:20], tag)
 
 	out := header
@@ -65,11 +65,7 @@ func (c *AESCCM) Open(transform []byte) ([]byte, error) {
 	tag := [16]byte(transform[4:20])
 	ct := transform[TransformHeaderSize:]
 
-	aad := make([]byte, TransformHeaderSize-4)
-	copy(aad, transform[4:TransformHeaderSize])
-	for i := range 16 {
-		aad[i] = 0
-	}
+	aad := transform[20:TransformHeaderSize]
 
 	pt, err := ccmDecrypt(c.block, nonce, aad, ct, tag[:])
 	if err != nil {
@@ -79,11 +75,11 @@ func (c *AESCCM) Open(transform []byte) ([]byte, error) {
 }
 
 func DeriveServerEncryptionKey(sessionKey []byte) []byte {
-	return kdfCounter(sessionKey, []byte("SMB2AESCCM\x00"), []byte("ServerIn \x00"))
+	return kdfCounter(sessionKey, []byte("SMB2AESCCM\x00"), []byte("ServerOut\x00"))
 }
 
 func DeriveServerDecryptionKey(sessionKey []byte) []byte {
-	return kdfCounter(sessionKey, []byte("SMB2AESCCM\x00"), []byte("ServerOut\x00"))
+	return kdfCounter(sessionKey, []byte("SMB2AESCCM\x00"), []byte("ServerIn \x00"))
 }
 
 func kdfCounter(ki, label, context []byte) []byte {

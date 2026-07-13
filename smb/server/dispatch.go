@@ -170,6 +170,7 @@ func (c *conn) handleSessionSetup(ctx context.Context, msg []byte, hdr *wire.Hea
 		sess.signingKey = signing.DeriveSigningKey(result.SessionKey)
 		sess.signingAlgo = signing.AlgoAESCMAC
 		sess.encryptionKey = encryption.DeriveServerEncryptionKey(result.SessionKey)
+		sess.decryptionKey = encryption.DeriveServerDecryptionKey(result.SessionKey)
 		sess.requireEncrypt = c.srv.requireEnc
 	}
 	c.out = ssr.Append(c.out)

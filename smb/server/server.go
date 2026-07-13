@@ -126,6 +126,7 @@ type session struct {
 	signingAlgo    signing.Algorithm
 	requireSign    bool
 	encryptionKey  []byte
+	decryptionKey  []byte
 	requireEncrypt bool
 }
 
@@ -206,7 +207,12 @@ func (s *Server) serveConn(ctx context.Context, c net.Conn) {
 		cn.out = cn.out[:0]
 		cn.handleMessage(ctx, msg)
 		if len(cn.out) > 0 {
+			if len(cn.out) >= 4 {
+				cmd := binary.LittleEndian.Uint16(cn.out[12:14])
+				cn.log.Info("pre-seal", "cmd", cmd, "len", len(cn.out), "proto", fmt.Sprintf("%02x", cn.out[0]))
+			}
 			if sealed, ok := cn.maybeSealResponse(cn.out); ok {
+				cn.log.Info("sealed response", "origLen", len(cn.out), "sealedLen", len(sealed))
 				cn.out = sealed
 			}
 			if err := cn.fc.WriteMessage(cn.out); err != nil {

@@ -41,10 +41,12 @@ func ctrBlock(block cipher.Block, nonce []byte, counter uint64) []byte {
 
 func cbcMac(block cipher.Block, nonce, aad, data []byte) [16]byte {
 	l := 15 - len(nonce)
+	const tagSize = 16
 	flags := byte(0)
 	if len(aad) > 0 {
 		flags |= 0x40
 	}
+	flags |= byte(((tagSize-2)/2)&0x7) << 3
 	flags |= byte(l - 1)
 
 	var b0 [16]byte

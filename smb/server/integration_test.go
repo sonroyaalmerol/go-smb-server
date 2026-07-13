@@ -135,3 +135,60 @@ func TestIntegration_ReferenceClient(t *testing.T) {
 		t.Fatal("readdir returned no entries")
 	}
 }
+
+func TestIntegration_Encrypted(t *testing.T) {
+	addr, _, stop := startNTLMServerOpt(t, WithEncryptionRequired())
+	defer stop()
+
+	conn, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+
+	d := &client.Dialer{
+		Initiator: &client.NTLMInitiator{
+			User:     "alice",
+			Password: "secret",
+			Domain:   "TEST",
+		},
+	}
+
+	s, err := d.Dial(conn)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer s.Logoff()
+
+	fs, err := s.Mount("share")
+	if err != nil {
+		t.Fatalf("tree_connect: %v", err)
+	}
+	defer fs.Umount()
+
+	f, err := fs.Create("enc.txt")
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	payload := []byte("secret payload over encrypted SMB3")
+	if _, err := f.Write(payload); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	defer fs.Remove("enc.txt")
+
+	f2, err := fs.Open("enc.txt")
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	got, err := io.ReadAll(f2)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	f2.Close()
+	if string(got) != string(payload) {
+		t.Fatalf("roundtrip = %q, want %q", got, payload)
+	}
+}
