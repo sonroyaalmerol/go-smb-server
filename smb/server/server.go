@@ -129,8 +129,10 @@ type tree struct {
 }
 
 type openHandle struct {
-	h      vfs.Handle
-	fileId [16]byte
+	h             vfs.Handle
+	fileId        [16]byte
+	path          string
+	deletePending bool
 }
 
 type conn struct {

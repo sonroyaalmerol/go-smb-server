@@ -51,6 +51,12 @@ func (c *conn) dispatch(ctx context.Context, msg []byte, hdr *wire.Header, lastF
 		return c.handleWrite(ctx, msg, tr)
 	case wire.CmdQueryDirectory:
 		return c.handleQueryDirectory(ctx, msg, tr)
+	case wire.CmdQueryInfo:
+		return c.handleQueryInfo(ctx, msg, tr)
+	case wire.CmdSetInfo:
+		return c.handleSetInfo(ctx, msg, tr)
+	case wire.CmdFlush:
+		return c.handleFlush(ctx, msg, tr)
 	case wire.CmdEcho:
 		return c.handleEcho(hdr)
 	default:
@@ -254,7 +260,7 @@ func (c *conn) handleCreate(ctx context.Context, msg []byte, hdr *wire.Header, t
 
 	tr.nextID++
 	fid := makeFileID(hdr.SessionId, hdr.TreeId, tr.nextID)
-	oh := &openHandle{h: h, fileId: fid}
+	oh := &openHandle{h: h, fileId: fid, path: name}
 	tr.opens[fid] = oh
 	*lastFileId = fid
 
@@ -303,6 +309,14 @@ func (c *conn) handleClose(ctx context.Context, msg []byte, tr *tree) uint32 {
 		return c.errBody(osErrToStatus(err))
 	}
 	delete(tr.opens, req.FileId)
+
+	if oh.deletePending {
+		if rm, ok := tr.share.Backend().(vfs.Remover); ok {
+			if rmErr := rm.Remove(ctx, oh.path); rmErr != nil {
+				return c.errBody(osErrToStatus(rmErr))
+			}
+		}
+	}
 
 	resp := wire.CloseResponse{Flags: req.Flags & wire.CloseFlagPostQueryAttrib}
 	if statErr == nil {

@@ -68,6 +68,10 @@ type Backend interface {
 	Open(ctx context.Context, opts OpenOptions) (Handle, error)
 }
 
+type Remover interface {
+	Remove(ctx context.Context, path string) error
+}
+
 type LocalBackend struct {
 	Root string
 }
@@ -78,6 +82,15 @@ func NewLocalBackend(root string) (*LocalBackend, error) {
 		return nil, err
 	}
 	return &LocalBackend{Root: abs}, nil
+}
+
+func (b *LocalBackend) Remove(_ context.Context, p string) error {
+	clean := path.Clean("/" + p)
+	if clean == "/" {
+		clean = ""
+	}
+	full := filepath.Join(b.Root, filepath.FromSlash(clean))
+	return os.RemoveAll(full)
 }
 
 func (b *LocalBackend) Open(_ context.Context, opts OpenOptions) (Handle, error) {

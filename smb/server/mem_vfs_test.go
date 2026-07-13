@@ -75,6 +75,19 @@ func splitDir(clean string) (dir, base string) {
 	return "", clean
 }
 
+func (b *memBackend) Remove(_ context.Context, p string) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	clean := path.Clean("/" + p)
+	dir, base := splitDir(clean)
+	parent := b.mustDir(dir)
+	if _, ok := parent.children[base]; !ok {
+		return fs.ErrNotExist
+	}
+	delete(parent.children, base)
+	return nil
+}
+
 func (b *memBackend) mustDir(p string) *memNode {
 	if p == "" {
 		return b.root

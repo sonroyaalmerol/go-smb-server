@@ -393,3 +393,92 @@ func parseDirInfoNames(buf []byte) []string {
 	}
 	return names
 }
+
+func TestEndToEnd_QueryInfoAndDeleteOnClose(t *testing.T) {
+	backend := newMemBackend()
+	client, srvConn := newPipeConns()
+	defer client.Close()
+	defer serveOn(newTestServer(backend), srvConn)()
+
+	fc := transport.NewFramedConn(client)
+	negotiate(t, fc)
+	sessID := sessionSetup(t, fc)
+	treeID := treeConnect(t, fc, sessID)
+
+	// CREATE a file
+	mustWrite(t, fc, buildCreate(sessID, treeID, "qinfo.txt", wire.FileOpenIf))
+	rh, resp := readReply(t, fc.Underlying())
+	if rh.Status != wire.StatusSuccess {
+		t.Fatalf("create: %x", rh.Status)
+	}
+	var fid [16]byte
+	copy(fid[:], resp[64+64:64+80])
+
+	// QUERY_INFO FileBasicInformation
+	mustWrite(t, fc, buildQueryInfo(sessID, treeID, fid, wire.FileBasicInfoClass))
+	rh, qResp := readReply(t, fc.Underlying())
+	if rh.Status != wire.StatusSuccess {
+		t.Fatalf("query_info: %x", rh.Status)
+	}
+	bufLen := int(binary.LittleEndian.Uint32(qResp[64+4 : 64+8]))
+	if bufLen < 40 {
+		t.Fatalf("FileBasicInformation len = %d, want >= 40", bufLen)
+	}
+
+	// SET_INFO FileDispositionInformation = 1 (delete on close)
+	mustWrite(t, fc, buildSetInfo(sessID, treeID, fid, wire.FileDispositionInformation, []byte{1}))
+	rh, _ = readReply(t, fc.Underlying())
+	if rh.Status != wire.StatusSuccess {
+		t.Fatalf("set_info: %x", rh.Status)
+	}
+
+	// CLOSE should delete the file
+	mustWrite(t, fc, buildClose(sessID, treeID, fid))
+	rh, _ = readReply(t, fc.Underlying())
+	if rh.Status != wire.StatusSuccess {
+		t.Fatalf("close: %x", rh.Status)
+	}
+
+	// Re-open should now fail (file gone).
+	mustWrite(t, fc, buildCreate(sessID, treeID, "qinfo.txt", wire.FileOpen))
+	rh, _ = readReply(t, fc.Underlying())
+	if rh.Status == wire.StatusSuccess {
+		t.Fatal("expected file to be deleted")
+	}
+}
+
+func buildQueryInfo(sessID uint64, treeID uint32, fid [16]byte, class uint8) []byte {
+	hdr := wire.NewHeader(wire.CmdQueryInfo)
+	hdr.SessionId = sessID
+	hdr.TreeId = treeID
+	hdr.MessageId = 20
+	hdr.Credit = 1
+	var body [41]byte
+	binary.LittleEndian.PutUint16(body[0:2], 41)
+	body[2] = wire.InfoFile
+	body[3] = class
+	binary.LittleEndian.PutUint32(body[4:8], 4096)
+	copy(body[24:40], fid[:])
+	m := hdr.Append(nil)
+	return append(m, body[:]...)
+}
+
+func buildSetInfo(sessID uint64, treeID uint32, fid [16]byte, class uint8, buf []byte) []byte {
+	hdr := wire.NewHeader(wire.CmdSetInfo)
+	hdr.SessionId = sessID
+	hdr.TreeId = treeID
+	hdr.MessageId = 21
+	hdr.Credit = 1
+	const fixed = 32
+	bufOff := wire.HeaderSize + fixed
+	body := make([]byte, fixed+len(buf))
+	binary.LittleEndian.PutUint16(body[0:2], 33)
+	body[2] = wire.InfoFile
+	body[3] = class
+	binary.LittleEndian.PutUint32(body[4:8], uint32(len(buf)))
+	binary.LittleEndian.PutUint16(body[8:10], uint16(bufOff))
+	copy(body[16:32], fid[:])
+	copy(body[fixed:], buf)
+	m := hdr.Append(nil)
+	return append(m, body...)
+}
