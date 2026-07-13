@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"time"
 	"testing"
 
 	"github.com/sonroyaalmerol/go-smb-server/smb/auth"
@@ -556,4 +557,73 @@ func buildLock(sessID uint64, treeID uint32, fid [16]byte, offset, length uint64
 	m := hdr.Append(nil)
 	out := append(m, body[:]...)
 	return append(out, le[:]...)
+}
+
+func TestEndToEnd_ChangeNotify(t *testing.T) {
+	backend := newMemBackend()
+	// seed one file so the watched dir exists
+	if _, err := backend.Open(context.Background(), vfs.OpenOptions{Path: "existing.txt", Disposition: vfs.DispositionCreate}); err != nil {
+		t.Fatal(err)
+	}
+
+	client, srvConn := newPipeConns()
+	defer client.Close()
+	defer serveOn(newTestServer(backend), srvConn)()
+
+	fc := transport.NewFramedConn(client)
+	negotiate(t, fc)
+	sessID := sessionSetup(t, fc)
+	treeID := treeConnect(t, fc, sessID)
+
+	// Open the directory root.
+	mustWrite(t, fc, buildCreate(sessID, treeID, "", wire.FileOpen))
+	rh, resp := readReply(t, fc.Underlying())
+	if rh.Status != wire.StatusSuccess {
+		t.Fatalf("create dir: %x", rh.Status)
+	}
+	var dirFid [16]byte
+	copy(dirFid[:], resp[64+64:64+80])
+
+	// Subscribe to CHANGE_NOTIFY (async).
+	mustWrite(t, fc, buildChangeNotify(sessID, treeID, dirFid, FileNotifyChangeFileName))
+	// Expect the interim STATUS_PENDING response.
+	rh, _ = readReply(t, fc.Underlying())
+	if rh.Status != wire.StatusPending {
+		t.Fatalf("change_notify interim: %x, want pending", rh.Status)
+	}
+	asyncID := rh.AsyncId
+
+	// Trigger a change from the server side via the backend (simulating another
+	// client writing). Wait past the watcher's poll interval.
+	go func() {
+		time.Sleep(700 * time.Millisecond)
+		_, _ = backend.Open(context.Background(), vfs.OpenOptions{Path: "new.txt", Disposition: vfs.DispositionCreate})
+	}()
+
+	// Expect a final async response with the added-file notification.
+	rh, cnResp := readReply(t, fc.Underlying())
+	if rh.Status != wire.StatusSuccess {
+		t.Fatalf("change_notify final: %x", rh.Status)
+	}
+	if rh.AsyncId != asyncID {
+		t.Fatalf("async id mismatch: %d != %d", rh.AsyncId, asyncID)
+	}
+	if len(cnResp) <= 64+8 {
+		t.Fatal("change_notify final has no body")
+	}
+}
+
+func buildChangeNotify(sessID uint64, treeID uint32, fid [16]byte, filter uint32) []byte {
+	hdr := wire.NewHeader(wire.CmdChangeNotify)
+	hdr.SessionId = sessID
+	hdr.TreeId = treeID
+	hdr.MessageId = 40
+	hdr.Credit = 1
+	var body [32]byte
+	binary.LittleEndian.PutUint16(body[0:2], 32)   // StructureSize
+	binary.LittleEndian.PutUint32(body[4:8], 4096) // OutputBufferLength
+	copy(body[8:24], fid[:])
+	binary.LittleEndian.PutUint32(body[24:28], filter)
+	m := hdr.Append(nil)
+	return append(m, body[:]...)
 }

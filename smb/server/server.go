@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net"
 	"sync"
+	"time"
 
 	"github.com/sonroyaalmerol/go-smb-server/smb/auth"
 	"github.com/sonroyaalmerol/go-smb-server/smb/signing"
@@ -144,6 +145,12 @@ type conn struct {
 	sessions      map[uint64]*session
 	nextSess      uint64
 	creditBalance uint32
+
+	nextAsync    uint64
+	pending      map[uint64]*pendingOp
+	pendingByMsg map[uint64]*pendingOp
+	pendingMu    sync.Mutex
+	asyncResp    chan []byte
 }
 
 func (s *Server) serveConn(ctx context.Context, c net.Conn) {
@@ -154,19 +161,30 @@ func (s *Server) serveConn(ctx context.Context, c net.Conn) {
 		log:           s.log,
 		sessions:      make(map[uint64]*session),
 		creditBalance: 1,
+		pending:       make(map[uint64]*pendingOp),
+		pendingByMsg:  make(map[uint64]*pendingOp),
+		asyncResp:     make(chan []byte, 64),
 	}
 
 	for {
 		if err := ctx.Err(); err != nil {
 			return
 		}
+		cn.drainAsync()
+
+		_ = cn.fc.Underlying().SetReadDeadline(time.Now().Add(200 * time.Millisecond))
 		msg, err := cn.fc.ReadMessage()
 		if err != nil {
+			var ne net.Error
+			if errors.As(err, &ne) && ne.Timeout() {
+				continue
+			}
 			if !errors.Is(err, net.ErrClosed) {
 				cn.log.Debug("read error", "err", err)
 			}
 			return
 		}
+		_ = cn.fc.Underlying().SetReadDeadline(time.Time{})
 		cn.out = cn.out[:0]
 		cn.handleMessage(ctx, msg)
 		if len(cn.out) > 0 {
@@ -174,6 +192,20 @@ func (s *Server) serveConn(ctx context.Context, c net.Conn) {
 				cn.log.Debug("write error", "err", err)
 				return
 			}
+		}
+	}
+}
+
+func (c *conn) drainAsync() {
+	for {
+		select {
+		case resp := <-c.asyncResp:
+			if err := c.fc.WriteMessage(resp); err != nil {
+				c.log.Debug("write async error", "err", err)
+				return
+			}
+		default:
+			return
 		}
 	}
 }
@@ -220,6 +252,27 @@ func (c *conn) handleMessage(ctx context.Context, msg []byte) {
 			}
 		}
 
+		if hdr.Command == wire.CmdChangeNotify && !chainFailed {
+			sess := c.getSession(hdr.SessionId)
+			var trCN *tree
+			if sess != nil {
+				trCN = sess.getTree(hdr.TreeId)
+			}
+			status, pending := c.handleChangeNotify(ctx, sub, &hdr, trCN)
+			if pending {
+				first = false
+				if hdr.NextCommand == 0 {
+					break
+				}
+				off += int(hdr.NextCommand)
+				continue
+			}
+			lastStatus = status
+			if status != wire.StatusSuccess && status != wire.StatusMoreProcessingRequired {
+				chainFailed = true
+			}
+		}
+
 		if prevRespStart >= 0 {
 			for len(c.out)%8 != 0 {
 				c.out = append(c.out, 0)
@@ -234,6 +287,8 @@ func (c *conn) handleMessage(ctx context.Context, msg []byte) {
 		switch {
 		case chainFailed:
 			status = lastStatus
+		case hdr.Command == wire.CmdCancel:
+			status = c.handleCancel(sub, &hdr)
 		default:
 			status = c.dispatch(ctx, sub, &hdr, &lastFileId, related)
 		}

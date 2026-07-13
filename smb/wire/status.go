@@ -4,6 +4,8 @@ import "fmt"
 
 const (
 	StatusSuccess                uint32 = 0x00000000
+	StatusPending                uint32 = 0x00000103
+	StatusCancelled              uint32 = 0xC0000120
 	StatusInvalidHandle          uint32 = 0xC0000008
 	StatusNotImplemented         uint32 = 0xC0000002
 	StatusInvalidParameter       uint32 = 0xC000000D
