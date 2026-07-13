@@ -126,6 +126,7 @@ type tree struct {
 	share  vfs.Share
 	opens  map[[16]byte]*openHandle
 	nextID uint64
+	locks  *lockMgrSet
 }
 
 type openHandle struct {

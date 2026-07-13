@@ -421,10 +421,6 @@ func (f *FileStandardInformation) Append(dst []byte) []byte {
 	return out
 }
 
-// FileAllInformation (MS-FSCC section 2.4.2) is Basic + Standard + ...; we
-// implement Basic + Standard + minimal nameless remainder for compatibility.
-const fileAllInfoMinSize = 40 + 24 + 4 + 4 + 8 + 16 // basic + standard + name(len+offs) + mode + pos + EA
-
 // FileAllInformationAppend writes a minimal FileAllInformation (Basic +
 // Standard + empty Access/Mode/Position/EA) suitable for common clients.
 func FileAllInformationAppend(dst []byte, basic FileBasicInformation, standard FileStandardInformation) []byte {
@@ -438,3 +434,113 @@ func FileAllInformationAppend(dst []byte, basic FileBasicInformation, standard F
 	_ = start
 	return out
 }
+
+// --- LOCK and IOCTL (sections 2.2.26 / 2.2.31) -----------------------------
+
+// LOCK element flags (MS-SMB2 section 2.2.26.1).
+const (
+	LockFlagSharedLock      uint32 = 0x00000001
+	LockFlagExclusiveLock   uint32 = 0x00000002
+	LockFlagUnlock          uint32 = 0x00000004
+	LockFlagFailImmediately uint32 = 0x00000010
+)
+
+// LockElement is one SMB2_LOCK_ELEMENT (section 2.2.26.1).
+type LockElement struct {
+	Offset uint64
+	Length uint64
+	Flags  uint32
+}
+
+// LockRequest is the SMB2 LOCK request body (section 2.2.26).
+type LockRequest struct {
+	Locks  []LockElement
+	FileId [16]byte
+}
+
+// Parse populates the request. msg is the full SMB2 message.
+func (r *LockRequest) Parse(msg []byte) error {
+	if len(msg) < createBody+48 {
+		return fmt.Errorf("wire: lock needs %d bytes", createBody+48)
+	}
+	b := msg[createBody:]
+	if ss := binary.LittleEndian.Uint16(b[0:2]); ss != 48 {
+		return fmt.Errorf("wire: lock StructureSize = %d, want 48", ss)
+	}
+	count := int(binary.LittleEndian.Uint16(b[2:4]))
+	copy(r.FileId[:], b[8:24])
+	end := 48 + count*24
+	if createBody+end > len(msg) {
+		return fmt.Errorf("wire: lock: %d locks exceed body", count)
+	}
+	r.Locks = make([]LockElement, count)
+	for i := range r.Locks {
+		off := 48 + i*24
+		r.Locks[i].Offset = binary.LittleEndian.Uint64(b[off : off+8])
+		r.Locks[i].Length = binary.LittleEndian.Uint64(b[off+8 : off+16])
+		r.Locks[i].Flags = binary.LittleEndian.Uint32(b[off+16 : off+20])
+	}
+	return nil
+}
+
+// LockResponseAppend writes the LOCK response (4-byte body).
+func LockResponseAppend(dst []byte) []byte {
+	return append(dst, 0x04, 0x00, 0x00, 0x00) // SS=4
+}
+
+// IoctlRequest is the SMB2 IOCTL request body (section 2.2.31).
+type IoctlRequest struct {
+	CtlCode           uint32
+	FileId            [16]byte
+	Input             []byte // aliases the message buffer
+	MaxOutputResponse uint32
+	Flags             uint32
+}
+
+// Parse populates the request. msg is the full SMB2 message.
+func (r *IoctlRequest) Parse(msg []byte) error {
+	if len(msg) < createBody+57 {
+		return fmt.Errorf("wire: ioctl needs %d bytes", createBody+57)
+	}
+	b := msg[createBody:]
+	if ss := binary.LittleEndian.Uint16(b[0:2]); ss != 57 {
+		return fmt.Errorf("wire: ioctl StructureSize = %d, want 57", ss)
+	}
+	r.CtlCode = binary.LittleEndian.Uint32(b[4:8])
+	copy(r.FileId[:], b[8:24])
+	inOff := int(binary.LittleEndian.Uint32(b[24:28]))
+	inLen := int(binary.LittleEndian.Uint32(b[28:32]))
+	r.MaxOutputResponse = binary.LittleEndian.Uint32(b[40:44])
+	r.Flags = binary.LittleEndian.Uint32(b[44:48])
+	if inLen > 0 && inOff+inLen <= len(msg) {
+		r.Input = msg[inOff : inOff+inLen]
+	}
+	return nil
+}
+
+// IoctlResponseAppend writes an IOCTL response carrying out as the output buffer.
+func IoctlResponseAppend(dst []byte, out []byte) []byte {
+	const fixed = 48
+	start := len(dst)
+	total := fixed + len(out)
+	out2 := append(dst, make([]byte, total)...)
+	b := out2[start:]
+	put16(b[0:2], 49) // StructureSize
+	// Input offset/count: zero (no input echoed).
+	outOff := uint32(start + fixed)
+	put32(b[24:28], outOff) // OutputOffset (from header)
+	put32(b[28:32], uint32(len(out)))
+	copy(b[fixed:], out)
+	return out2
+}
+
+// FSCTL control codes (MS-SMB2 section 2.2.31 / MS-FSCC section 2.3).
+const (
+	FSCTLDfsGetReferrals           uint32 = 0x00060194
+	FSCTLSrvCopychunk              uint32 = 0x001440F2
+	FSCTLSrvEnumerateSnapshots     uint32 = 0x00144064
+	FSCTLSrvRequestResumeKey       uint32 = 0x00140078
+	FSCTLQueryNetworkInterfaceInfo uint32 = 0x001401FC
+	FSCTLValidateNegotiateInfo     uint32 = 0x00140204
+	FSCTLLMRRequestResiliency      uint32 = 0x001401D4
+)

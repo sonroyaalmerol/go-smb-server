@@ -10,7 +10,6 @@ import (
 
 var spnegoOID = asn1.ObjectIdentifier{1, 3, 6, 1, 5, 5, 2}
 
-var ntlmOID = asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 311, 2, 2, 10}
 
 func UnwrapSPNEGOToken(token []byte) ([]byte, error) {
 	if isNTLMSSP(token) {

@@ -57,6 +57,10 @@ func (c *conn) dispatch(ctx context.Context, msg []byte, hdr *wire.Header, lastF
 		return c.handleSetInfo(ctx, msg, tr)
 	case wire.CmdFlush:
 		return c.handleFlush(ctx, msg, tr)
+	case wire.CmdLock:
+		return c.handleLock(ctx, msg, tr)
+	case wire.CmdIoctl:
+		return c.handleIoctl(ctx, msg, tr)
 	case wire.CmdEcho:
 		return c.handleEcho(hdr)
 	default:
@@ -195,6 +199,7 @@ func (c *conn) handleTreeConnect(msg []byte, hdr *wire.Header, sess *session) ui
 	sess.trees[treeID] = &tree{
 		share: sh,
 		opens: make(map[[16]byte]*openHandle),
+		locks: newLockMgrSet(),
 	}
 	hdr.TreeId = treeID
 

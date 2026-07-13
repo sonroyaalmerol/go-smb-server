@@ -482,3 +482,78 @@ func buildSetInfo(sessID uint64, treeID uint32, fid [16]byte, class uint8, buf [
 	m := hdr.Append(nil)
 	return append(m, body...)
 }
+
+func TestEndToEnd_LockConflict(t *testing.T) {
+	backend := newMemBackend()
+	client, srvConn := newPipeConns()
+	defer client.Close()
+	defer serveOn(newTestServer(backend), srvConn)()
+
+	fc := transport.NewFramedConn(client)
+	negotiate(t, fc)
+	sessID := sessionSetup(t, fc)
+	treeID := treeConnect(t, fc, sessID)
+
+	// Open the same file twice.
+	mustWrite(t, fc, buildCreate(sessID, treeID, "locktest.txt", wire.FileOpenIf))
+	rh, resp := readReply(t, fc.Underlying())
+	if rh.Status != wire.StatusSuccess {
+		t.Fatalf("create1: %x", rh.Status)
+	}
+	var fid1 [16]byte
+	copy(fid1[:], resp[64+64:64+80])
+
+	mustWrite(t, fc, buildCreate(sessID, treeID, "locktest.txt", wire.FileOpenIf))
+	rh, resp = readReply(t, fc.Underlying())
+	if rh.Status != wire.StatusSuccess {
+		t.Fatalf("create2: %x", rh.Status)
+	}
+	var fid2 [16]byte
+	copy(fid2[:], resp[64+64:64+80])
+
+	// Take an exclusive lock on [0,100) from fid1.
+	mustWrite(t, fc, buildLock(sessID, treeID, fid1, 0, 100, wire.LockFlagExclusiveLock))
+	rh, _ = readReply(t, fc.Underlying())
+	if rh.Status != wire.StatusSuccess {
+		t.Fatalf("lock1: %x", rh.Status)
+	}
+
+	// An exclusive lock on the same range from fid2 must conflict.
+	mustWrite(t, fc, buildLock(sessID, treeID, fid2, 0, 100, wire.LockFlagExclusiveLock|wire.LockFlagFailImmediately))
+	rh, _ = readReply(t, fc.Underlying())
+	if rh.Status != wire.StatusLockConflict {
+		t.Fatalf("expected lock conflict, got %x", rh.Status)
+	}
+
+	// Unlock from fid1, then fid2's lock should succeed.
+	mustWrite(t, fc, buildLock(sessID, treeID, fid1, 0, 100, wire.LockFlagUnlock))
+	rh, _ = readReply(t, fc.Underlying())
+	if rh.Status != wire.StatusSuccess {
+		t.Fatalf("unlock: %x", rh.Status)
+	}
+	mustWrite(t, fc, buildLock(sessID, treeID, fid2, 0, 100, wire.LockFlagExclusiveLock|wire.LockFlagFailImmediately))
+	rh, _ = readReply(t, fc.Underlying())
+	if rh.Status != wire.StatusSuccess {
+		t.Fatalf("lock2 after unlock: %x", rh.Status)
+	}
+}
+
+func buildLock(sessID uint64, treeID uint32, fid [16]byte, offset, length uint64, flags uint32) []byte {
+	hdr := wire.NewHeader(wire.CmdLock)
+	hdr.SessionId = sessID
+	hdr.TreeId = treeID
+	hdr.MessageId = 30
+	hdr.Credit = 1
+	var body [48]byte
+	binary.LittleEndian.PutUint16(body[0:2], 48) // StructureSize
+	binary.LittleEndian.PutUint16(body[2:4], 1)  // LockCount
+	copy(body[8:24], fid[:])
+	// One SMB2_LOCK_ELEMENT at body offset 48.
+	var le [24]byte
+	binary.LittleEndian.PutUint64(le[0:8], offset)
+	binary.LittleEndian.PutUint64(le[8:16], length)
+	binary.LittleEndian.PutUint32(le[16:20], flags)
+	m := hdr.Append(nil)
+	out := append(m, body[:]...)
+	return append(out, le[:]...)
+}

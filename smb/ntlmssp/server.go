@@ -22,7 +22,6 @@ type ServerAuthenticator struct {
 	challenge  [8]byte
 	targetName string
 	negotiate  []byte
-	gotMIC     bool
 
 	domain string
 	user   string

@@ -24,6 +24,8 @@ const (
 	StatusLogonFailure           uint32 = 0xC000006D
 	StatusBadNetworkName         uint32 = 0xC00000CC
 	StatusNetworkNameDeleted     uint32 = 0xC00000C9
+	StatusLockConflict           uint32 = 0xC0000054
+	StatusRangeNotLocked         uint32 = 0xC000007A
 	StatusNoMoreFiles            uint32 = 0x80000006
 	StatusUserSessionDeleted     uint32 = 0xC0000203
 )

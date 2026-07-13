@@ -86,21 +86,6 @@ func TestSignVerifyRoundTrip(t *testing.T) {
 	}
 }
 
-func makeBlock(t *testing.T) func(dst, src, key []byte) {
-	t.Helper()
-	return func(dst, src, key []byte) {
-		b, err := aes.NewCipher(key)
-		if err != nil {
-			t.Fatal(err)
-		}
-		b.Encrypt(dst, src)
-	}
-}
-
-func aesNewCipher(key []byte) (interface{ Encrypt([]byte, []byte) }, error) {
-	return aes.NewCipher(key)
-}
-
 func isZero(b []byte) bool {
 	for _, v := range b {
 		if v != 0 {
