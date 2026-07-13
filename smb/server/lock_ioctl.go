@@ -4,6 +4,7 @@ import (
 	"context"
 	"sync"
 
+	"github.com/sonroyaalmerol/go-smb-server/smb/vfs"
 	"github.com/sonroyaalmerol/go-smb-server/smb/wire"
 )
 
@@ -103,7 +104,7 @@ func (c *conn) handleLock(_ context.Context, msg []byte, tr *tree) uint32 {
 	return wire.StatusSuccess
 }
 
-func (c *conn) handleIoctl(_ context.Context, msg []byte, tr *tree) uint32 {
+func (c *conn) handleIoctl(ctx context.Context, msg []byte, tr *tree) uint32 {
 	var req wire.IoctlRequest
 	if err := req.Parse(msg); err != nil {
 		return c.errBody(wire.StatusInvalidParameter)
@@ -119,6 +120,17 @@ func (c *conn) handleIoctl(_ context.Context, msg []byte, tr *tree) uint32 {
 	case wire.FSCTLPipeWait:
 		c.out = wire.IoctlResponseAppend(c.out, req.CtlCode, req.FileId, nil, nil, req.Flags)
 		return wire.StatusSuccess
+	case wire.FSCTLPipeTransceive:
+		if tr != nil {
+			if oh, ok := tr.opens[req.FileId]; ok {
+				if pp, ok2 := oh.h.(vfs.PipeProcessor); ok2 {
+					result := pp.ProcessPipe(ctx, req.Input)
+					c.out = wire.IoctlResponseAppend(c.out, req.CtlCode, req.FileId, req.Input, result, req.Flags)
+					return wire.StatusSuccess
+				}
+			}
+		}
+		return c.errBody(wire.StatusNotSupported)
 	default:
 		if tr == nil {
 			return c.errBody(wire.StatusInvalidDeviceRequest)

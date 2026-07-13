@@ -558,4 +558,5 @@ const (
 	FSCTLValidateNegotiateInfo     uint32 = 0x00140204
 	FSCTLLMRRequestResiliency      uint32 = 0x001401D4
 	FSCTLPipeWait                  uint32 = 0x00110018
+	FSCTLPipeTransceive            uint32 = 0x0011C017
 )

@@ -121,6 +121,14 @@ func (h *pipeHandle) Enumerate(ctx context.Context, pattern string) iter.Seq2[Fi
 	return func(yield func(FileInfo, error) bool) {}
 }
 
+func (h *pipeHandle) ProcessPipe(_ context.Context, input []byte) []byte {
+	h.mu.Lock()
+	h.writeBuf = append(h.writeBuf[:0], input...)
+	result := h.handler(h.writeBuf)
+	h.mu.Unlock()
+	return result
+}
+
 func toUTF16LE(s string) []byte {
 	r := []rune(s)
 	out := make([]byte, len(r)*2)
@@ -158,19 +166,19 @@ func SrvsvcHandler(shares [][2]string) PipeHandler {
 }
 
 func handleSrvsvcRPC(body []byte, shares [][2]string) []byte {
-	if len(body) < 24 {
+	if len(body) < 16 {
 		return buildNackResponse(0)
 	}
 	pduType := body[2]
-	callID := binary.LittleEndian.Uint32(body[4:8])
+	callID := binary.LittleEndian.Uint32(body[12:16])
 
 	switch pduType {
 	case 0x0B:
 		return buildBindAck(callID)
 	case 0x00:
 		opnum := uint16(0)
-		if len(body) >= 16 {
-			opnum = binary.LittleEndian.Uint16(body[14:16])
+		if len(body) >= 24 {
+			opnum = binary.LittleEndian.Uint16(body[22:24])
 		}
 		if opnum == 15 {
 			stub := buildNetrShareEnumResponse(shares)
@@ -183,37 +191,35 @@ func handleSrvsvcRPC(body []byte, shares [][2]string) []byte {
 }
 
 func buildBindAck(callID uint32) []byte {
-	total := 24 + 44
-	b := make([]byte, total)
+	b := make([]byte, 56)
 	b[0] = 5
 	b[1] = 0
 	b[2] = 0x0C
-	b[3] = 0x00
-	putLE32(b[4:8], callID)
-	putLE16(b[8:10], 5840)
-	putLE16(b[10:12], 5840)
-	putLE32(b[12:16], 0x000053b6)
+	b[3] = 0x03
+	b[4], b[5], b[6], b[7] = 0x10, 0x00, 0x00, 0x00
+	putLE16(b[8:10], 56)
+	putLE16(b[10:12], 0)
+	putLE32(b[12:16], callID)
+	putLE16(b[16:18], 5840)
+	putLE16(b[18:20], 5840)
+	putLE32(b[20:24], 0x000053b6)
 
-	putLE16(b[16:18], 24)
-	putLE16(b[18:20], 0)
+	putLE16(b[24:26], 0)
+	putLE16(b[26:28], 40)
 
-	b[24] = 1
+	putLE32(b[28:32], 1)
 
-	b[28] = 0
-	b[29] = 0
-	putLE16(b[30:32], 1)
+	b[32] = 0
+	b[33] = 0
+	b[34] = 0
+	b[35] = 0
 
 	tsUUID := [16]byte{
 		0x04, 0x5d, 0x88, 0x8a, 0xeb, 0x1c, 0xc9, 0x11,
 		0x9f, 0xe8, 0x08, 0x00, 0x2b, 0x10, 0x48, 0x60,
 	}
-	putLE16(b[32:34], 2)
-	putLE16(b[34:36], 0)
 	copy(b[36:52], tsUUID[:])
-
-	copy(b[52:68], srvsvcUUID[:])
-	putLE16(b[68:70], 3)
-	putLE16(b[70:72], 0)
+	putLE32(b[52:56], 2)
 
 	return b
 }
@@ -226,10 +232,14 @@ func buildResponsePDU(callID uint32, stub []byte) []byte {
 	b[0] = 5
 	b[1] = 0
 	b[2] = 0x02
-	b[3] = 0x00
-	putLE32(b[4:8], callID)
-	putLE32(b[8:12], uint32(stubLen))
-	putLE16(b[12:14], 0)
+	b[3] = 0x03
+	b[4], b[5], b[6], b[7] = 0x10, 0x00, 0x00, 0x00
+	putLE16(b[8:10], uint16(total))
+	putLE16(b[10:12], 0)
+	putLE32(b[12:16], callID)
+	putLE32(b[16:20], uint32(stubLen))
+	putLE16(b[20:22], 0)
+	putLE16(b[22:24], 0)
 	copy(b[24:], stub)
 	return b
 }
@@ -239,10 +249,15 @@ func buildNackResponse(callID uint32) []byte {
 	b[0] = 5
 	b[1] = 0
 	b[2] = 0x03
-	b[3] = 0x00
-	putLE32(b[4:8], callID)
-	putLE32(b[8:12], 20)
-	putLE32(b[16:20], 0x000006E4)
+	b[3] = 0x03
+	b[4], b[5], b[6], b[7] = 0x10, 0x00, 0x00, 0x00
+	putLE16(b[8:10], 32)
+	putLE16(b[10:12], 0)
+	putLE32(b[12:16], callID)
+	putLE32(b[16:20], 20)
+	putLE16(b[20:22], 0)
+	putLE16(b[22:24], 0)
+	putLE32(b[24:28], 0x000006E4)
 	return b
 }
 

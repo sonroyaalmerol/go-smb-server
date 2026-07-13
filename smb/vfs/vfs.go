@@ -96,6 +96,10 @@ type Copier interface {
 	CopyChunk(ctx context.Context, srcPath string, srcOffset, dstOffset, length int64) error
 }
 
+type PipeProcessor interface {
+	ProcessPipe(ctx context.Context, input []byte) []byte
+}
+
 type LocalBackend struct {
 	Root string
 }
