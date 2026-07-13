@@ -25,7 +25,7 @@ func UTF16ToBytes(s string) []byte {
 }
 
 const FileDirInfoMinSize = 64
-const FileIdBothDirInfoMinSize = 102
+const FileIdBothDirInfoMinSize = 104
 
 const (
 	FileDirectoryInformation       = 0x01
@@ -33,7 +33,7 @@ const (
 )
 
 const fileDirInfoFixed = 64
-const fileIdBothDirInfoFixed = 102
+const fileIdBothDirInfoFixed = 104
 
 type FileInfo struct {
 	Name           string
@@ -88,11 +88,11 @@ func AppendFileIdBothDirInfo(dst []byte, fi FileInfo) (out []byte, entryStart in
 	put64(b[40:48], fi.EndOfFile)
 	put64(b[48:56], fi.AllocationSize)
 	put32(b[56:60], fi.FileAttributes)
-	put32(b[60:64], 0)
-	b[64] = 0
-	b[65] = 0
-	put64(b[90:98], 0)
-	put32(b[98:102], uint32(len(name)))
+	put32(b[60:64], uint32(len(name)))
+	put32(b[64:68], 0)
+	b[68] = 0
+	b[69] = 0
+	put64(b[96:104], 0)
 	pad := (8 - len(out[entryStart:])%8) % 8
 	if pad > 0 {
 		out = append(out, make([]byte, pad)...)

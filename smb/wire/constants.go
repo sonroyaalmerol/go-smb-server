@@ -67,3 +67,7 @@ const (
 	CapEncryption        uint32 = 0x00000040
 	CapNotifications     uint32 = 0x00000080
 )
+
+const (
+	FileDeleteOnClose uint32 = 0x00001000
+)

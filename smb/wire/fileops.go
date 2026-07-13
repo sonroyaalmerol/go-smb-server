@@ -273,7 +273,7 @@ const (
 
 // FileInfoClass values for sets (MS-FSCC section 2.4).
 const (
-	FileDispositionInformation uint8 = 0x0E
+	FileDispositionInformation uint8 = 0x0D
 	FileEndOfFileInformation   uint8 = 0x14
 	FileRenameInformation      uint8 = 0x0A
 )
@@ -359,9 +359,8 @@ func QueryInfoResponseAppend(dst []byte, info []byte) []byte {
 	return out
 }
 
-// SetInfoResponseAppend writes the SET_INFO response (8-byte fixed body).
 func SetInfoResponseAppend(dst []byte) []byte {
-	return append(dst, 0x21, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00) // SS=33
+	return append(dst, 0x02, 0x00)
 }
 
 // FlushResponseAppend writes the FLUSH response (4-byte fixed body).

@@ -281,7 +281,7 @@ func (c *conn) handleCreate(ctx context.Context, msg []byte, hdr *wire.Header, t
 
 	tr.nextID++
 	fid := makeFileID(hdr.SessionId, hdr.TreeId, tr.nextID)
-	oh := &openHandle{h: h, fileId: fid, path: name}
+	oh := &openHandle{h: h, fileId: fid, path: name, deletePending: req.CreateOptions&wire.FileDeleteOnClose != 0}
 	tr.opens[fid] = oh
 	*lastFileId = fid
 
