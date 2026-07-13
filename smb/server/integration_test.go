@@ -15,13 +15,17 @@ import (
 )
 
 func startNTLMServer(t *testing.T) (addr string, backend *memBackend, stop func()) {
+	return startNTLMServerOpt(t)
+}
+
+func startNTLMServerOpt(t *testing.T, srvOpts ...Option) (addr string, backend *memBackend, stop func()) {
 	t.Helper()
 	backend = newMemBackend()
 
 	creds := ntlmssp.NewMemoryCredentials()
 	creds.Add("TEST", "alice", "secret")
 
-	srv, err := newServerWith(ntlmssp.NewServer(creds, "SRV"), backend)
+	srv, err := newServerWith(ntlmssp.NewServer(creds, "SRV"), backend, srvOpts...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -50,15 +54,13 @@ func startNTLMServer(t *testing.T) (addr string, backend *memBackend, stop func(
 	return ln.Addr().String(), backend, stop
 }
 
-func newServerWith(authFactory auth.Factory, backend vfs.Backend) (*Server, error) {
-	srv, err := New(
+func newServerWith(authFactory auth.Factory, backend vfs.Backend, opts ...Option) (*Server, error) {
+	args := []Option{
 		WithShares(vfs.NewDiskShare("share", backend)),
 		WithAuth(authFactory),
-	)
-	if err != nil {
-		return nil, err
 	}
-	return srv, nil
+	args = append(args, opts...)
+	return New(args...)
 }
 
 func TestIntegration_ReferenceClient(t *testing.T) {

@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/sonroyaalmerol/go-smb-server/smb/auth"
+	"github.com/sonroyaalmerol/go-smb-server/smb/encryption"
 	"github.com/sonroyaalmerol/go-smb-server/smb/signing"
 	"github.com/sonroyaalmerol/go-smb-server/smb/vfs"
 	"github.com/sonroyaalmerol/go-smb-server/smb/wire"
@@ -107,7 +108,7 @@ func (c *conn) handleNegotiate(msg []byte, hdr *wire.Header) uint32 {
 		SecurityMode:    wire.SigningEnabled,
 		DialectRevision: dialect,
 		ServerGuid:      c.srv.guid,
-		Capabilities:    wire.CapLargeMTU,
+		Capabilities:    c.negotiateCapabilities(),
 		MaxTransactSize: c.srv.maxTransact,
 		MaxReadSize:     c.srv.maxRead,
 		MaxWriteSize:    c.srv.maxWrite,
@@ -160,11 +161,16 @@ func (c *conn) handleSessionSetup(ctx context.Context, msg []byte, hdr *wire.Hea
 	ssr := wire.SessionSetupResponse{
 		SecurityBuffer: result.OutputToken,
 	}
+	if c.srv.requireEnc {
+		ssr.SessionFlags |= wire.SessionFlagEncryptData
+	}
 	if result.Identity != nil {
 		sess.identity = result.Identity
 		sess.authenticated = true
 		sess.signingKey = signing.DeriveSigningKey(result.SessionKey)
 		sess.signingAlgo = signing.AlgoAESCMAC
+		sess.encryptionKey = encryption.DeriveServerEncryptionKey(result.SessionKey)
+		sess.requireEncrypt = c.srv.requireEnc
 	}
 	c.out = ssr.Append(c.out)
 	if sess.authenticated {

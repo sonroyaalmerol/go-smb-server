@@ -52,6 +52,12 @@ const (
 )
 
 const (
+	SessionFlagIsGuest     uint16 = 0x0001
+	SessionFlagIsNull      uint16 = 0x0002
+	SessionFlagEncryptData uint16 = 0x0004
+)
+
+const (
 	CapDFS               uint32 = 0x00000001
 	CapLeasing           uint32 = 0x00000002
 	CapLargeMTU          uint32 = 0x00000004

@@ -35,6 +35,7 @@ type Server struct {
 	maxRead     uint32
 	maxWrite    uint32
 	maxCredits  uint32
+	requireEnc  bool
 	log         *slog.Logger
 	guid        [16]byte
 }
@@ -52,6 +53,8 @@ func WithShares(shares ...vfs.Share) Option {
 func WithLogger(l *slog.Logger) Option { return func(s *Server) { s.log = l } }
 
 func WithMaxCredits(n uint32) Option { return func(s *Server) { s.maxCredits = n } }
+
+func WithEncryptionRequired() Option { return func(s *Server) { s.requireEnc = true } }
 
 func WithDialect(d uint16) Option { return func(s *Server) { s.dialect = d } }
 
@@ -114,14 +117,16 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 }
 
 type session struct {
-	auth          auth.Authenticator
-	identity      *auth.Identity
-	authenticated bool
-	trees         map[uint32]*tree
-	nextTreeID    uint32
-	signingKey    []byte
-	signingAlgo   signing.Algorithm
-	requireSign   bool
+	auth           auth.Authenticator
+	identity       *auth.Identity
+	authenticated  bool
+	trees          map[uint32]*tree
+	nextTreeID     uint32
+	signingKey     []byte
+	signingAlgo    signing.Algorithm
+	requireSign    bool
+	encryptionKey  []byte
+	requireEncrypt bool
 }
 
 type tree struct {
@@ -188,9 +193,22 @@ func (s *Server) serveConn(ctx context.Context, c net.Conn) {
 			return
 		}
 		_ = cn.fc.Underlying().SetReadDeadline(time.Time{})
+
+		if len(msg) >= 4 && msg[0] == 0xFD {
+			dec, dErr := cn.openTransform(msg)
+			if dErr != nil {
+				cn.log.Debug("decrypt error", "err", dErr)
+				return
+			}
+			msg = dec
+		}
+
 		cn.out = cn.out[:0]
 		cn.handleMessage(ctx, msg)
 		if len(cn.out) > 0 {
+			if sealed, ok := cn.maybeSealResponse(cn.out); ok {
+				cn.out = sealed
+			}
 			if err := cn.fc.WriteMessage(cn.out); err != nil {
 				cn.log.Debug("write error", "err", err)
 				return
