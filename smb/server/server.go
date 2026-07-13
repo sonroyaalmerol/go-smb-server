@@ -81,6 +81,20 @@ func New(opts ...Option) (*Server, error) {
 	for _, sh := range s.shares {
 		s.shareByName[sh.Name()] = sh
 	}
+
+	if _, ok := s.shareByName["IPC$"]; !ok {
+		shareNames := make([][2]string, len(s.shares)+1)
+		shareNames[0] = [2]string{"IPC$", "Remote IPC"}
+		for i, sh := range s.shares {
+			shareNames[i+1] = [2]string{sh.Name(), ""}
+		}
+		pb := vfs.NewPipeBackend()
+		pb.Register("srvsvc", vfs.SrvsvcHandler(shareNames))
+		ipcShare := vfs.NewDiskShare("IPC$", pb)
+		s.shares = append(s.shares, ipcShare)
+		s.shareByName["IPC$"] = ipcShare
+	}
+
 	if _, err := rand.Read(s.guid[:]); err != nil {
 		return nil, fmt.Errorf("server: generate guid: %w", err)
 	}
