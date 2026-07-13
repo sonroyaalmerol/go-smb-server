@@ -59,8 +59,8 @@ func cbcMac(block cipher.Block, nonce, aad, data []byte) [16]byte {
 	block.Encrypt(x[:], x[:])
 
 	if len(aad) > 0 {
-		x = macBlocks(block, x, encodeAADLength(aad))
-		x = macBlocks(block, x, aad)
+		encoded := append(encodeAADLength(aad), aad...)
+		x = macBlocks(block, x, encoded)
 	}
 	x = macBlocks(block, x, data)
 	return x

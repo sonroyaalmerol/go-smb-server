@@ -207,12 +207,7 @@ func (s *Server) serveConn(ctx context.Context, c net.Conn) {
 		cn.out = cn.out[:0]
 		cn.handleMessage(ctx, msg)
 		if len(cn.out) > 0 {
-			if len(cn.out) >= 4 {
-				cmd := binary.LittleEndian.Uint16(cn.out[12:14])
-				cn.log.Info("pre-seal", "cmd", cmd, "len", len(cn.out), "proto", fmt.Sprintf("%02x", cn.out[0]))
-			}
 			if sealed, ok := cn.maybeSealResponse(cn.out); ok {
-				cn.log.Info("sealed response", "origLen", len(cn.out), "sealedLen", len(sealed))
 				cn.out = sealed
 			}
 			if err := cn.fc.WriteMessage(cn.out); err != nil {
@@ -342,11 +337,10 @@ func (c *conn) handleMessage(ctx context.Context, msg []byte) {
 
 		if sess := c.getSession(hdr.SessionId); sess != nil && sess.signingKey != nil {
 			subResp := c.out[respStart:]
+			hdr.Flags |= wire.FlagSigned
+			binary.LittleEndian.PutUint32(subResp[16:20], hdr.Flags)
 			if err := signing.Sign(subResp, sess.signingKey, sess.signingAlgo); err != nil {
 				c.log.Debug("sign response failed", "err", err)
-			} else {
-				hdr.Flags |= wire.FlagSigned
-				binary.LittleEndian.PutUint32(c.out[respStart+16:respStart+20], hdr.Flags)
 			}
 		}
 
