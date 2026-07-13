@@ -11,6 +11,7 @@ import (
 	"sync"
 
 	"github.com/sonroyaalmerol/go-smb-server/smb/auth"
+	"github.com/sonroyaalmerol/go-smb-server/smb/signing"
 	"github.com/sonroyaalmerol/go-smb-server/smb/transport"
 	"github.com/sonroyaalmerol/go-smb-server/smb/vfs"
 	"github.com/sonroyaalmerol/go-smb-server/smb/wire"
@@ -203,6 +204,19 @@ func (c *conn) handleMessage(ctx context.Context, msg []byte) {
 			c.creditBalance = 0
 		}
 
+		if sess := c.getSession(hdr.SessionId); sess != nil && sess.signingKey != nil {
+			if hdr.Flags&wire.FlagSigned != 0 {
+				ok, vErr := signing.Verify(sub, sess.signingKey, signing.AlgoAESCMAC)
+				if vErr != nil || !ok {
+					chainFailed = true
+					lastStatus = wire.StatusAccessDenied
+				}
+			} else if sess.requireSign {
+				chainFailed = true
+				lastStatus = wire.StatusAccessDenied
+			}
+		}
+
 		if prevRespStart >= 0 {
 			for len(c.out)%8 != 0 {
 				c.out = append(c.out, 0)
@@ -240,6 +254,16 @@ func (c *conn) handleMessage(ctx context.Context, msg []byte) {
 		hdr.Flags &^= wire.FlagAsyncCommand
 		hdr.Status = status
 		hdr.EncodeAt(c.out[respStart:])
+
+		if sess := c.getSession(hdr.SessionId); sess != nil && sess.signingKey != nil && !chainFailed {
+			subResp := c.out[respStart:]
+			if err := signing.Sign(subResp, sess.signingKey, signing.AlgoAESCMAC); err != nil {
+				c.log.Debug("sign response failed", "err", err)
+			} else {
+				hdr.Flags |= wire.FlagSigned
+				binary.LittleEndian.PutUint32(c.out[respStart+16:respStart+20], hdr.Flags)
+			}
+		}
 
 		prevRespStart = respStart
 		first = false
