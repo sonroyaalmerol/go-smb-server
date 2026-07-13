@@ -62,6 +62,10 @@ func AppendFileDirInfo(dst []byte, fi FileInfo) (out []byte, entryStart int) {
 	put64(b[48:56], fi.AllocationSize)
 	put32(b[56:60], fi.FileAttributes)
 	put32(b[60:64], uint32(len(name)))
+	pad := (8 - len(out[entryStart:])%8) % 8
+	if pad > 0 {
+		out = append(out, make([]byte, pad)...)
+	}
 	return out, entryStart
 }
 
@@ -89,5 +93,9 @@ func AppendFileIdBothDirInfo(dst []byte, fi FileInfo) (out []byte, entryStart in
 	b[65] = 0
 	put64(b[90:98], 0)
 	put32(b[98:102], uint32(len(name)))
+	pad := (8 - len(out[entryStart:])%8) % 8
+	if pad > 0 {
+		out = append(out, make([]byte, pad)...)
+	}
 	return out, entryStart
 }

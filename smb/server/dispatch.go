@@ -415,6 +415,14 @@ func (c *conn) handleQueryDirectory(ctx context.Context, msg []byte, tr *tree) u
 		pattern = "*"
 	}
 
+	useFileIdBothDir := req.FileInformationClass == wire.FileIdBothDirectoryInformation
+	entryMinSize := wire.FileDirInfoMinSize
+	encoder := wire.AppendFileDirInfo
+	if useFileIdBothDir {
+		entryMinSize = wire.FileIdBothDirInfoMinSize
+		encoder = wire.AppendFileIdBothDirInfo
+	}
+
 	const bodyFixed = 8
 	bodyStart := len(c.out)
 	c.out = append(c.out, make([]byte, bodyFixed)...)
@@ -430,7 +438,7 @@ func (c *conn) handleQueryDirectory(ctx context.Context, msg []byte, tr *tree) u
 			}
 			break
 		}
-		if len(c.out)-bufStart+wire.FileDirInfoMinSize+len(fi.Name)*2 > int(req.OutputBufferLength) {
+		if len(c.out)-bufStart+entryMinSize+len(fi.Name)*2 > int(req.OutputBufferLength) {
 			break
 		}
 		encFi := wire.FileInfo{
@@ -444,7 +452,7 @@ func (c *conn) handleQueryDirectory(ctx context.Context, msg []byte, tr *tree) u
 			ChangeTime:     wire.TimeToFiletime(fi.ChangeTime),
 		}
 		var entryStart int
-		c.out, entryStart = wire.AppendFileDirInfo(c.out, encFi)
+		c.out, entryStart = encoder(c.out, encFi)
 		if prevEntryStart >= 0 {
 			wire.SetNextEntryOffset(c.out, prevEntryStart, entryStart)
 		}
