@@ -193,8 +193,8 @@ func buildSessionSetup(token []byte) []byte {
 	hdr.Credit = 1
 	body := make([]byte, 24+len(token))
 	binary.LittleEndian.PutUint16(body[0:2], 25)
-	binary.LittleEndian.PutUint16(body[8:10], uint16(wire.HeaderSize+24))
-	binary.LittleEndian.PutUint16(body[10:12], uint16(len(token)))
+	binary.LittleEndian.PutUint16(body[12:14], uint16(wire.HeaderSize+24))
+	binary.LittleEndian.PutUint16(body[14:16], uint16(len(token)))
 	copy(body[24:], token)
 	m := hdr.Append(nil)
 	return append(m, body...)
