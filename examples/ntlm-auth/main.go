@@ -16,7 +16,6 @@ import (
 func main() {
 	addr := flag.String("addr", ":445", "listen address")
 	dir := flag.String("dir", "/tmp/smbshare", "directory to export")
-	share := flag.String("share", "share", "share name")
 	flag.Parse()
 
 	backend, err := vfs.NewLocalBackend(*dir)
@@ -26,12 +25,12 @@ func main() {
 	}
 
 	creds := ntlmssp.NewMemoryCredentials()
-	creds.Add("", "guest", "")
-	creds.Add("WORKGROUP", "guest", "")
+	creds.Add("WORKGROUP", "alice", "secret")
+	creds.Add("WORKGROUP", "bob", "password123")
 
 	srv, err := server.New(
 		server.WithAddr(*addr),
-		server.WithShares(vfs.NewDiskShare(*share, backend)),
+		server.WithShares(vfs.NewDiskShare("share", backend)),
 		server.WithAuth(ntlmssp.NewServer(creds, "FILESRV")),
 		server.WithLogger(slog.Default()),
 	)
@@ -43,7 +42,7 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	slog.Info("serving (guest access)", "addr", *addr, "share", *share, "dir", *dir)
+	slog.Info("serving (NTLMv2 auth)", "addr", *addr, "dir", *dir)
 	if err := srv.ListenAndServe(ctx); err != nil {
 		slog.Error("serve", "err", err)
 		os.Exit(1)

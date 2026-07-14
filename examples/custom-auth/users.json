@@ -1,0 +1,4 @@
+[
+  {"domain": "WORKGROUP", "username": "alice", "password": "secret"},
+  {"domain": "WORKGROUP", "username": "bob", "password": "password123"}
+]
