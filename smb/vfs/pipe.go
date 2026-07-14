@@ -263,18 +263,20 @@ func buildNackResponse(callID uint32) []byte {
 
 func buildNetrShareEnumResponse(shares [][2]string) []byte {
 	var buf []byte
+	refID := uint32(0x00020000)
+	nextRef := func() uint32 { r := refID; refID += 4; return r }
+
 	addU32 := func(v uint32) {
 		var tmp [4]byte
 		putLE32(tmp[:], v)
 		buf = append(buf, tmp[:]...)
 	}
 	addStr := func(s string) {
-		addU32(0x00020000)
-		u := toUTF16LE(s)
-		n := uint32(len(u) / 2)
-		addU32(n + 1)
+		cnt := uint32(len([]rune(s)) + 1)
+		addU32(cnt)
 		addU32(0)
-		addU32(n + 1)
+		addU32(cnt)
+		u := toUTF16LE(s)
 		buf = append(buf, u...)
 		buf = append(buf, 0x00, 0x00)
 		for len(buf)&3 != 0 {
@@ -282,17 +284,33 @@ func buildNetrShareEnumResponse(shares [][2]string) []byte {
 		}
 	}
 
-	addU32(0x00020000)
-	addU32(uint32(len(shares)))
-	addU32(0x00020000)
-	addU32(uint32(len(shares)))
+	n := uint32(len(shares))
+
+	addU32(1)
+	addU32(1)
+	ctrRef := nextRef()
+	addU32(ctrRef)
+
+	addU32(0)
+	addU32(0)
+
+	addU32(n)
+	bufRef := nextRef()
+	addU32(bufRef)
+
+	addU32(n)
+	for range shares {
+		addU32(nextRef())
+		addU32(srvsvcShareTypeDisk)
+		addU32(nextRef())
+	}
 
 	for _, sh := range shares {
 		addStr(sh[0])
-		addU32(srvsvcShareTypeDisk)
 		addStr(sh[1])
 	}
 
-	addU32(0)
+	addU32(n)
+
 	return buf
 }

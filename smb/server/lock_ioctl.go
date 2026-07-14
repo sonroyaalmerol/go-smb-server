@@ -125,7 +125,7 @@ func (c *conn) handleIoctl(ctx context.Context, msg []byte, tr *tree) uint32 {
 			if oh, ok := tr.opens[req.FileId]; ok {
 				if pp, ok2 := oh.h.(vfs.PipeProcessor); ok2 {
 					result := pp.ProcessPipe(ctx, req.Input)
-					c.out = wire.IoctlResponseAppend(c.out, req.CtlCode, req.FileId, req.Input, result, req.Flags)
+					c.out = wire.IoctlResponseAppend(c.out, req.CtlCode, req.FileId, nil, result, req.Flags)
 					return wire.StatusSuccess
 				}
 			}
