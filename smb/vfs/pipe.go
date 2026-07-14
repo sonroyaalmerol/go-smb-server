@@ -134,10 +134,9 @@ func (h *pipeHandle) Enumerate(ctx context.Context, pattern string) iter.Seq2[Fi
 
 func (h *pipeHandle) ProcessPipe(_ context.Context, input []byte) []byte {
 	h.mu.Lock()
-	h.writeBuf = append(h.writeBuf[:0], input...)
-	result := h.handler(h.writeBuf)
+	inputCopy := append([]byte(nil), input...)
 	h.mu.Unlock()
-	return result
+	return h.handler(inputCopy)
 }
 
 func toUTF16LE(s string) []byte {
