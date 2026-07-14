@@ -4,13 +4,15 @@ import "context"
 
 type RelayFunc func(ctx context.Context, spnegoToken []byte) (response []byte, sessionKey []byte, identity *Identity, err error)
 
+type RelayFactory func() RelayFunc
+
 type RelayAuthenticator struct {
 	relay RelayFunc
 }
 
-func NewRelayAuthenticator(relay RelayFunc) Factory {
+func NewRelayAuthenticator(relayFactory RelayFactory) Factory {
 	return func() Authenticator {
-		return &RelayAuthenticator{relay: relay}
+		return &RelayAuthenticator{relay: relayFactory()}
 	}
 }
 
