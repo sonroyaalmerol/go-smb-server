@@ -35,18 +35,18 @@ func (c *AESCCM) Seal(msg []byte, sessionID uint64) ([]byte, error) {
 		return nil, fmt.Errorf("encryption: nonce: %w", err)
 	}
 
-	header := make([]byte, TransformHeaderSize)
-	copy(header[0:4], transformProtocolId[:])
-	copy(header[20:36], nonce[:])
-	binary.LittleEndian.PutUint32(header[36:40], uint32(len(msg)))
-	binary.LittleEndian.PutUint16(header[42:44], 0x0001)
-	binary.LittleEndian.PutUint64(header[44:52], sessionID)
+	out := make([]byte, TransformHeaderSize+len(msg))
+	copy(out[0:4], transformProtocolId[:])
+	copy(out[20:36], nonce[:])
+	binary.LittleEndian.PutUint32(out[36:40], uint32(len(msg)))
+	binary.LittleEndian.PutUint16(out[42:44], 0x0001)
+	binary.LittleEndian.PutUint64(out[44:52], sessionID)
 
-	ct, tag := ccmEncrypt(c.block, ccmNonce, header[20:TransformHeaderSize], msg)
-	copy(header[4:20], tag)
-
-	out := header
-	out = append(out, ct...)
+	ct := out[TransformHeaderSize:]
+	copy(ct, msg)
+	aad := out[20:TransformHeaderSize]
+	tag := ccmEncryptInPlace(c.block, ccmNonce, aad, ct)
+	copy(out[4:20], tag[:])
 	return out, nil
 }
 
@@ -62,16 +62,14 @@ func (c *AESCCM) Open(transform []byte) ([]byte, error) {
 		return nil, fmt.Errorf("encryption: OriginalMessageSize %d != ciphertext %d", origSize, len(transform)-TransformHeaderSize)
 	}
 	nonce := transform[20:31]
-	tag := [16]byte(transform[4:20])
+	tag := transform[4:20]
 	ct := transform[TransformHeaderSize:]
-
 	aad := transform[20:TransformHeaderSize]
 
-	pt, err := ccmDecrypt(c.block, nonce, aad, ct, tag[:])
-	if err != nil {
+	if err := ccmDecryptInPlace(c.block, nonce, aad, ct, tag); err != nil {
 		return nil, err
 	}
-	return pt, nil
+	return ct, nil
 }
 
 func DeriveServerEncryptionKey(sessionKey []byte) []byte {

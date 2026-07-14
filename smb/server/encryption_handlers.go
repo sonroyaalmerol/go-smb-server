@@ -17,11 +17,14 @@ func (c *conn) openTransform(transform []byte) ([]byte, error) {
 	if sess == nil || sess.decryptionKey == nil {
 		return nil, errors.New("server: no decryption key for session")
 	}
-	ccm, err := encryption.NewAESCCM(sess.decryptionKey)
-	if err != nil {
-		return nil, err
+	if sess.decCCM == nil {
+		ccm, err := encryption.NewAESCCM(sess.decryptionKey)
+		if err != nil {
+			return nil, err
+		}
+		sess.decCCM = ccm
 	}
-	return ccm.Open(transform)
+	return sess.decCCM.Open(transform)
 }
 
 func (c *conn) maybeSealResponse(out []byte) ([]byte, bool) {
@@ -37,12 +40,15 @@ func (c *conn) maybeSealResponse(out []byte) ([]byte, bool) {
 	if sess == nil || sess.encryptionKey == nil || !sess.requireEncrypt {
 		return nil, false
 	}
-	ccm, err := encryption.NewAESCCM(sess.encryptionKey)
-	if err != nil {
-		c.log.Debug("seal: new ccm", "err", err)
-		return nil, false
+	if sess.encCCM == nil {
+		ccm, err := encryption.NewAESCCM(sess.encryptionKey)
+		if err != nil {
+			c.log.Debug("seal: new ccm", "err", err)
+			return nil, false
+		}
+		sess.encCCM = ccm
 	}
-	sealed, err := ccm.Seal(out, sessID)
+	sealed, err := sess.encCCM.Seal(out, sessID)
 	if err != nil {
 		c.log.Debug("seal response", "err", err)
 		return nil, false
@@ -50,8 +56,6 @@ func (c *conn) maybeSealResponse(out []byte) ([]byte, bool) {
 	return sealed, true
 }
 
-// negotiateCapabilities returns the server capabilities to advertise in the
-// NEGOTIATE response: always LargeMTU; Encryption when the server requires it.
 func (c *conn) negotiateCapabilities() uint32 {
 	caps := wire.CapLargeMTU
 	if c.srv.requireEnc {

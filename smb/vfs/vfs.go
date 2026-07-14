@@ -141,10 +141,10 @@ func (b *LocalBackend) CopyChunk(_ context.Context, srcPath string, srcOffset, d
 		return err
 	}
 	defer dst.Close()
-	buf := make([]byte, 65536)
+	var buf [65536]byte
 	remaining := length
 	for remaining > 0 {
-		chunk := buf
+		chunk := buf[:]
 		if remaining < int64(len(buf)) {
 			chunk = buf[:remaining]
 		}

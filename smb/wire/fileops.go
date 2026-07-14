@@ -173,12 +173,33 @@ func ReadResponseAppend(dst []byte, data []byte) []byte {
 	out = append(out, data...)
 	b := out[start : start+fixed]
 	put16(b[0:2], 17)
-	b[2] = byte(start + fixed)
-	b[3] = 0
+	put16(b[2:4], uint16(start+fixed))
 	put32(b[4:8], uint32(len(data)))
 	put32(b[8:12], 0)
 	put32(b[12:16], 0)
 	return out
+}
+
+func ReadResponseAlloc(dst []byte, length int) []byte {
+	const fixed = 16
+	start := len(dst)
+	out := append(dst, make([]byte, fixed+length)...)
+	b := out[start : start+fixed]
+	put16(b[0:2], 17)
+	put16(b[2:4], uint16(start+fixed))
+	put32(b[4:8], uint32(length))
+	put32(b[8:12], 0)
+	put32(b[12:16], 0)
+	return out
+}
+
+func ReadResponseSetCount(out []byte, start, n int) []byte {
+	put32(out[start+4:start+8], uint32(n))
+	return out[:start+16+n]
+}
+
+func ReadResponseData(out []byte, start int) []byte {
+	return out[start+16:]
 }
 
 type WriteRequest struct {

@@ -390,15 +390,18 @@ func (c *conn) handleRead(ctx context.Context, msg []byte, tr *tree) uint32 {
 	if !ok {
 		return c.errBody(wire.StatusInvalidHandle)
 	}
-	buf := make([]byte, req.Length)
-	n, err := oh.h.Read(ctx, int64(req.Offset), buf)
+	respStart := len(c.out)
+	c.out = wire.ReadResponseAlloc(c.out, int(req.Length))
+	n, err := oh.h.Read(ctx, int64(req.Offset), wire.ReadResponseData(c.out, respStart))
 	if err != nil && !errors.Is(err, errEOF) {
+		c.out = c.out[:respStart]
 		return c.errBody(osErrToStatus(err))
 	}
 	if n == 0 {
+		c.out = c.out[:respStart]
 		return c.errBody(wire.StatusEndOfFile)
 	}
-	c.out = wire.ReadResponseAppend(c.out, buf[:n])
+	c.out = wire.ReadResponseSetCount(c.out, respStart, n)
 	return wire.StatusSuccess
 }
 

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/sonroyaalmerol/go-smb-server/smb/auth"
+	"github.com/sonroyaalmerol/go-smb-server/smb/encryption"
 	"github.com/sonroyaalmerol/go-smb-server/smb/signing"
 	"github.com/sonroyaalmerol/go-smb-server/smb/transport"
 	"github.com/sonroyaalmerol/go-smb-server/smb/vfs"
@@ -143,6 +144,8 @@ type session struct {
 	encryptionKey  []byte
 	decryptionKey  []byte
 	requireEncrypt bool
+	encCCM         *encryption.AESCCM
+	decCCM         *encryption.AESCCM
 }
 
 type tree struct {

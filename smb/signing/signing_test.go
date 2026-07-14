@@ -34,20 +34,22 @@ func TestCMACSubkeys(t *testing.T) {
 }
 
 func TestCMACEmptyMessage(t *testing.T) {
-	got, err := aesCMAC(nil, rfcKey)
+	s, err := NewSigner(rfcKey, AlgoAESCMAC)
 	if err != nil {
 		t.Fatal(err)
 	}
+	got := s.cmac(nil)
 	if !constantEqual(got[:], emptyCMAC) {
 		t.Fatalf("CMAC(\"\") = %x, want %x", got, emptyCMAC)
 	}
 }
 
 func TestCMACOneBlock(t *testing.T) {
-	got, err := aesCMAC(oneBlock, rfcKey)
+	s, err := NewSigner(rfcKey, AlgoAESCMAC)
 	if err != nil {
 		t.Fatal(err)
 	}
+	got := s.cmac(oneBlock)
 	if !constantEqual(got[:], oneBlockCMAC) {
 		t.Fatalf("CMAC(1 block) = %x, want %x", got, oneBlockCMAC)
 	}

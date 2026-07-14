@@ -80,11 +80,12 @@ func SessionBaseKey(responseKeyNT, ntProofStr []byte) []byte {
 var ErrInvalidNTLMMessage = errors.New("ntlmssp: invalid NTLM message")
 
 func toUTF16LE(s string) string {
-	r := []rune(s)
-	out := make([]byte, 0, len(r)*2)
-	for _, c := range r {
+	var b strings.Builder
+	b.Grow(len(s) * 2)
+	for _, c := range s {
 		v := uint16(c)
-		out = append(out, byte(v), byte(v>>8))
+		b.WriteByte(byte(v))
+		b.WriteByte(byte(v >> 8))
 	}
-	return string(out)
+	return b.String()
 }

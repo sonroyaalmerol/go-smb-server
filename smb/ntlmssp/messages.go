@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"strings"
 )
 
 func fieldLen(b []byte) int { return int(binary.LittleEndian.Uint16(b[0:2])) }
@@ -131,14 +132,12 @@ func UTF16String(b []byte) string {
 }
 
 func decodeUTF16LE(b []byte) string {
-	if len(b)%2 != 0 {
-		b = b[:len(b)-1]
+	var sb strings.Builder
+	sb.Grow(len(b) / 2)
+	for i := 0; i+1 < len(b); i += 2 {
+		sb.WriteRune(rune(uint16(b[i]) | uint16(b[i+1])<<8))
 	}
-	runes := make([]rune, 0, len(b)/2)
-	for i := 0; i < len(b); i += 2 {
-		runes = append(runes, rune(uint16(b[i])|uint16(b[i+1])<<8))
-	}
-	return string(runes)
+	return sb.String()
 }
 
 var ErrShortMessage = errors.New("ntlmssp: short message")

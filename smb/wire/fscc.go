@@ -1,25 +1,24 @@
 package wire
 
 import (
-	"unicode/utf16"
+	"strings"
 )
 
 func UTF16FromBytes(b []byte) string {
-	n := len(b) / 2
-	runes := make([]uint16, n)
-	for i := range n {
-		runes[i] = uint16(b[2*i]) | uint16(b[2*i+1])<<8
+	var sb strings.Builder
+	sb.Grow(len(b) / 2)
+	for i := 0; i+1 < len(b); i += 2 {
+		r := rune(uint16(b[i]) | uint16(b[i+1])<<8)
+		sb.WriteRune(r)
 	}
-	return string(utf16.Decode(runes))
+	return sb.String()
 }
 
 func UTF16ToBytes(s string) []byte {
-	runes := []rune(s)
-	enc := utf16.Encode(runes)
-	out := make([]byte, len(enc)*2)
-	for i, r := range enc {
-		out[2*i] = byte(r)
-		out[2*i+1] = byte(r >> 8)
+	out := make([]byte, 0, len(s)*2)
+	for _, r := range s {
+		v := uint16(r)
+		out = append(out, byte(v), byte(v>>8))
 	}
 	return out
 }
