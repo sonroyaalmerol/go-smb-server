@@ -50,11 +50,9 @@ func (s *ServerAuthenticator) Accept(ctx context.Context, token []byte) (auth.Ac
 }
 
 func (s *ServerAuthenticator) handleNegotiate(msg []byte) (auth.AcceptResult, error) {
-	neg, err := ParseNegotiateMessage(msg)
-	if err != nil {
+	if _, err := ParseNegotiateMessage(msg); err != nil {
 		return auth.AcceptResult{}, fmt.Errorf("ntlmssp: parse negotiate: %w", err)
 	}
-	_ = neg
 	if _, err := rand.Read(s.challenge[:]); err != nil {
 		return auth.AcceptResult{}, fmt.Errorf("ntlmssp: generate challenge: %w", err)
 	}

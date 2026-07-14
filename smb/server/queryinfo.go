@@ -205,8 +205,7 @@ func (c *conn) handleSetInfo(ctx context.Context, msg []byte, tr *tree) uint32 {
 	return c.errBody(wire.StatusNotSupported)
 }
 
-func (c *conn) handleFlush(_ context.Context, _ []byte, tr *tree) uint32 {
-	_ = tr
+func (c *conn) handleFlush(_ context.Context, _ []byte, _ *tree) uint32 {
 	c.out = wire.FlushResponseAppend(c.out)
 	return wire.StatusSuccess
 }

@@ -40,7 +40,29 @@ func NewFramedConn(c net.Conn) *FramedConn {
 }
 
 func (f *FramedConn) ReadMessage() ([]byte, error) {
-	return ReadFrame(f.r, &f.readBuf)
+	if _, err := io.ReadFull(f.r, f.hdrBuf[:]); err != nil {
+		return nil, fmt.Errorf("transport: read frame header: %w", err)
+	}
+	if f.hdrBuf[0] != 0x00 {
+		return nil, fmt.Errorf("transport: unexpected frame type byte 0x%02x", f.hdrBuf[0])
+	}
+	n := int(readUint24(f.hdrBuf[1:]))
+	if n == 0 {
+		f.readBuf = f.readBuf[:0]
+		return f.readBuf, nil
+	}
+	if n > MaxMessageLen {
+		return nil, fmt.Errorf("%w: %d bytes", ErrFrameTooLarge, n)
+	}
+	if cap(f.readBuf) < n {
+		f.readBuf = make([]byte, n)
+	} else {
+		f.readBuf = f.readBuf[:n]
+	}
+	if _, err := io.ReadFull(f.r, f.readBuf); err != nil {
+		return nil, fmt.Errorf("transport: read frame body: %w", err)
+	}
+	return f.readBuf, nil
 }
 
 func (f *FramedConn) WriteMessage(payload []byte) error {

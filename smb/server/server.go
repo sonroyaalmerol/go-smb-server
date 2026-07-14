@@ -445,13 +445,11 @@ func (c *conn) cleanup() {
 	c.pendingByMsg = nil
 	c.pendingMu.Unlock()
 
-	ctx := context.Background()
 	for _, sess := range c.sessions {
 		for _, tr := range sess.trees {
 			c.closeAllOpens(tr)
 		}
 	}
-	_ = ctx
 }
 
 func (c *conn) updatePreauth(msg []byte) {

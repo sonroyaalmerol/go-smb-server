@@ -81,15 +81,12 @@ func DeriveServerDecryptionKey(sessionKey []byte) []byte {
 }
 
 func kdfCounter(ki, label, context []byte) []byte {
-	mac := hmacSHA256(ki, func() []byte {
-		var b []byte
-		b = append(b, 0x00, 0x00, 0x00, 0x01)
-		b = append(b, label...)
-		b = append(b, 0x00)
-		b = append(b, context...)
-		b = append(b, 0x00, 0x00, 0x00, 0x80)
-		return b
-	}())
-	_ = mac
+	var b []byte
+	b = append(b, 0x00, 0x00, 0x00, 0x01)
+	b = append(b, label...)
+	b = append(b, 0x00)
+	b = append(b, context...)
+	b = append(b, 0x00, 0x00, 0x00, 0x80)
+	mac := hmacSHA256(ki, b)
 	return mac[:16]
 }

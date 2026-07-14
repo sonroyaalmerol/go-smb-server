@@ -56,7 +56,6 @@ func (s *Signer) Sign(msg []byte) error {
 	if len(msg) < headerSize {
 		return errShort
 	}
-	orig := [16]byte(msg[48:64])
 	for i := 48; i < 64; i++ {
 		msg[i] = 0
 	}
@@ -70,7 +69,6 @@ func (s *Signer) Sign(msg []byte) error {
 		sig = s.cmac(msg)
 	}
 	copy(msg[48:64], sig[:])
-	_ = orig
 	return nil
 }
 

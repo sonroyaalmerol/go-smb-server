@@ -449,14 +449,9 @@ func (f *FileStandardInformation) Append(dst []byte) []byte {
 // FileAllInformationAppend writes a minimal FileAllInformation (Basic +
 // Standard + empty Access/Mode/Position/EA) suitable for common clients.
 func FileAllInformationAppend(dst []byte, basic FileBasicInformation, standard FileStandardInformation) []byte {
-	start := len(dst)
 	out := basic.Append(dst)
 	out = standard.Append(out)
-	// AccessInformation (4) + ModeInformation (4) + PositionInformation (8) +
-	// AlignmentRequirement (4) ... we emit zeros for these required-but-empty
-	// members; many clients ignore them.
 	out = append(out, make([]byte, 4+4+8+4)...)
-	_ = start
 	return out
 }
 

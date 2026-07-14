@@ -80,17 +80,21 @@ func (h *pipeHandle) Read(ctx context.Context, offset int64, p []byte) (int, err
 	}
 
 	var data []byte
-	switch {
-	case h.readPos >= len(h.readBuf) && h.hasWrite:
-		data = h.handler(h.writeBuf)
-		h.readBuf = data
+	var input []byte
+	if h.readPos >= len(h.readBuf) && h.hasWrite {
+		input = h.writeBuf
+		h.readBuf = nil
 		h.readPos = 0
 		h.hasWrite = false
 		h.writeBuf = nil
-	case h.readPos < len(h.readBuf):
+	} else if h.readPos < len(h.readBuf) {
 		data = h.readBuf
 	}
 	h.mu.Unlock()
+
+	if input != nil {
+		data = h.handler(input)
+	}
 
 	if len(data) == 0 {
 		return 0, io.EOF
