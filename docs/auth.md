@@ -113,3 +113,56 @@ func (a *MyAuthenticator) Accept(ctx context.Context, token []byte) (auth.Accept
 ```
 
 Return `auth.ErrLogonFailed` to trigger `STATUS_LOGON_FAILURE` — the client will see an authentication error. Any other error returns `STATUS_ACCESS_DENIED`.
+
+## Relay authentication (no plaintext password)
+
+When the identity provider doesn't expose plaintext passwords or NT hashes — for example Authentik LDAP outposts, OAuth providers, or hosted directories — use `auth.NewRelayAuthenticator` to forward the SPNEGO/NTLMSSP exchange to an external validation service.
+
+NTLMv2 is a challenge-response protocol: the server generates a random challenge and the client proves it knows the password by computing a response. Validating that response requires the NT hash (`MD4(UTF-16LE(password))`). If your identity store can't provide it, validation must be delegated to a service that can.
+
+### How relay auth works
+
+1. The SMB client sends a SPNEGO token containing the NTLMSSP NEGOTIATE.
+2. The `RelayAuthenticator` forwards it to the external service.
+3. The external service returns a CHALLENGE token.
+4. The challenge is sent to the client.
+5. The client sends the AUTHENTICATE token.
+6. The relay forwards it to the external service.
+7. The external service validates the response and returns the session key.
+8. The SMB server uses the session key for signing and encryption.
+
+### Usage
+
+```go
+relay := func(ctx context.Context, spnegoToken []byte) ([]byte, []byte, *auth.Identity, error) {
+    // Forward spnegoToken to your identity provider.
+    // Return: response token, session key (16 bytes), identity, error.
+    // On intermediate exchanges: return response token, nil key, nil identity.
+    // On final exchange: return all three.
+    // On failure: return auth.ErrLogonFailed.
+    return respToken, sessionKey, &auth.Identity{Username: user}, nil
+}
+
+server.WithAuth(auth.NewRelayAuthenticator(relay))
+```
+
+### External service options
+
+| Service | How to relay |
+|---------|-------------|
+| **Active Directory** | LDAP SASL GSS-SPNEGO bind (go-ldap `BindSASL`) |
+| **Another SMB server** | Forward raw SMB2 SESSION_SETUP tokens |
+| **Custom HTTP API** | POST base64-encoded tokens, receive JSON response |
+| **Authentik / OAuth** | Requires a bridge service that can complete the NTLM exchange |
+
+### Why Authentik LDAP outposts need a bridge
+
+Authentik LDAP outposts validate passwords via LDAP simple bind, but don't store NT hashes. NTLMv2 validation requires the NT hash to verify the challenge-response. Since the LDAP outpost can't provide it, a bridge service must either:
+
+1. Have access to the plaintext password at bind time to compute the NT hash
+2. Relay the NTLM exchange to Active Directory
+3. Store NT hashes alongside Authentik's password store
+
+Option 1 is typically not available. Option 2 requires AD. Option 3 requires a custom Authentik outpost that writes `sambaNTPassword` on user creation/update.
+
+If your identity provider can store NT hashes (even computed from the password at provisioning time), use the standard `ntlmssp.CredentialLookup` interface instead of relay — it's simpler and doesn't require a relay service.
