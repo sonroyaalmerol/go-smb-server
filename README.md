@@ -2,7 +2,7 @@
 
 A from-scratch SMB2/3 server library in Go, built directly from the
 [Microsoft Open Specifications](specs/). Export any filesystem backend over SMB
-with pluggable authentication (NTLMv2, relay, or custom).
+with pluggable authentication (Kerberos, NTLMv2, relay, or custom).
 
 This is a library, not a Samba replacement. It provides a clean VFS and auth
 boundary so you can serve any backend (local disk, in-memory, object store,
@@ -36,7 +36,7 @@ Runnable examples at [`examples/`](examples/).
 | Document | Covers |
 |----------|--------|
 | [Server configuration](docs/server.md) | `server.New()`, options, `Shutdown()` |
-| [Authentication](docs/auth.md) | `Authenticator`, NTLMSSP, relay auth, LDAP |
+| [Authentication](docs/auth.md) | `Authenticator`, NTLMSSP, Kerberos, relay auth, LDAP |
 | [Virtual filesystem](docs/vfs.md) | `Backend`, `Handle`, optional interfaces, `PipeBackend` |
 | [Encryption & signing](docs/encryption.md) | SMB3 AES-128-CCM, signing, `Signer` type |
 | [Protocol support](docs/protocol.md) | Commands, dialects, FSCTLs, oplocks, preauth |

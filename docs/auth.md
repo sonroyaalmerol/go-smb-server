@@ -16,7 +16,7 @@ type Identity struct {
 type AcceptResult struct {
     OutputToken []byte
     Identity    *Identity  // nil until authentication completes
-    SessionKey  []byte     // 16-byte NTLM session key
+    SessionKey  []byte     // GSS session key (16-byte NTLM, or Kerberos key)
 }
 
 type Authenticator interface {
@@ -53,6 +53,53 @@ type CredentialLookup interface {
     LookupNTOWFv2(ctx context.Context, domain, user string) ([]byte, error)
 }
 ```
+
+## Built-in Kerberos v5
+
+For domain (Active Directory / MIT) authentication use `smb/kerberos`, a
+GSS-SPNEGO acceptor backed by [gokrb5](https://github.com/jcmturner/gokrb5).
+It validates the client's Kerberos AP-REQ against a service keytab and exports
+the GSS session key, which SMB3 signing and encryption derive from through
+the standard MS-SMB2 KDF. No SMB-specific crypto lives in the package.
+
+```go
+kt, err := keytab.Load("/etc/krb5.keytab")
+if err != nil { /* ... */ }
+
+server.WithAuth(kerberos.NewServer(kt))
+```
+
+The keytab must hold the service principal's long-term key — the entry the
+KDC issued a service ticket for, typically `cifs/<host>@REALM`. By default the
+principal is taken from the ticket itself; override it with an option:
+
+```go
+kerberos.NewServer(kt,
+    kerberos.WithKeytabPrincipal("cifs/fileserver.example.com"),
+    kerberos.WithMaxClockSkew(5*time.Minute),
+    kerberos.WithoutPAC(),          // skip PAC decode / group SID extraction
+    kerberos.WithLogger(logger),
+)
+```
+
+**Session key selection (RFC 4121 §2):** the exported key is the
+initiator-asserted authenticator subkey when present, otherwise the
+service-ticket session key. SMB does not negotiate Kerberos mutual auth, so
+no AP-REP is produced and authentication completes in a single round trip
+(NegTokenInit in, NegTokenResp accept-completed out). On success the resulting
+`auth.Identity` carries the client's user and realm, plus group membership SIDs
+when the ticket carries a decodable (AD-style) PAC.
+
+**PAC handling:** the accept/reject decision never depends on the PAC. PAC
+decoding is best-effort attribute extraction, so a ticket that carries a PAC
+which gokrb5 cannot fully decode (notably MIT-KDC PACs that omit the
+AD-specific KerbValidationInfo buffer) still authenticates successfully — it
+simply yields no group SIDs. This was verified end-to-end against a real MIT
+`krb5kdc`.
+
+**Single mechanism per server:** `WithAuth` takes one factory, so a server is
+configured for either NTLMSSP or Kerberos, not both. A client must then offer
+the matching mechanism in its SPNEGO mech list.
 
 ## Relay authentication (no plaintext password)
 

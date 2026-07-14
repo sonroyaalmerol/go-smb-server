@@ -10,6 +10,7 @@ import (
 	goforkasn1 "github.com/jcmturner/gofork/encoding/asn1"
 	"github.com/jcmturner/gokrb5/v8/gssapi"
 	"github.com/jcmturner/gokrb5/v8/keytab"
+	"github.com/jcmturner/gokrb5/v8/messages"
 	"github.com/jcmturner/gokrb5/v8/service"
 	"github.com/jcmturner/gokrb5/v8/spnego"
 
@@ -20,6 +21,7 @@ type Option func(*config)
 
 type config struct {
 	settings []func(*service.Settings)
+	noPAC    bool
 }
 
 func WithMaxClockSkew(d time.Duration) Option {
@@ -35,7 +37,7 @@ func WithLogger(l *log.Logger) Option {
 }
 
 func WithoutPAC() Option {
-	return func(c *config) { c.settings = append(c.settings, service.DecodePAC(false)) }
+	return func(c *config) { c.noPAC = true }
 }
 
 func NewServer(kt *keytab.Keytab, opts ...Option) auth.Factory {
@@ -43,24 +45,33 @@ func NewServer(kt *keytab.Keytab, opts ...Option) auth.Factory {
 	for _, o := range opts {
 		o(cfg)
 	}
-	settings := service.NewSettings(kt, cfg.settings...)
 	return func() auth.Authenticator {
-		return &Authenticator{settings: settings}
+		return &Authenticator{keytab: kt, opts: cfg.settings, wantPAC: !cfg.noPAC}
 	}
 }
 
 type Authenticator struct {
-	settings *service.Settings
-	done     bool
+	keytab  *keytab.Keytab
+	opts    []func(*service.Settings)
+	wantPAC bool
+	done    bool
+}
+
+func (a *Authenticator) verifySettings() *service.Settings {
+	opts := make([]func(*service.Settings), 0, len(a.opts)+1)
+	opts = append(opts, a.opts...)
+	opts = append(opts, service.DecodePAC(false))
+	return service.NewSettings(a.keytab, opts...)
 }
 
 func (a *Authenticator) Accept(_ context.Context, token []byte) (auth.AcceptResult, error) {
 	if a.done {
 		return auth.AcceptResult{}, errors.New("kerberos: security context already established")
 	}
-	if a.settings == nil || a.settings.Keytab == nil {
+	if a.keytab == nil {
 		return auth.AcceptResult{}, fmt.Errorf("kerberos: no service keytab configured")
 	}
+	settings := a.verifySettings()
 
 	mech, err := extractMechToken(token)
 	if err != nil {
@@ -75,7 +86,7 @@ func (a *Authenticator) Accept(_ context.Context, token []byte) (auth.AcceptResu
 		return auth.AcceptResult{}, auth.ErrLogonFailed
 	}
 
-	ok, creds, err := service.VerifyAPREQ(&mt.APReq, a.settings)
+	ok, creds, err := service.VerifyAPREQ(&mt.APReq, settings)
 	if err != nil || !ok {
 		return auth.AcceptResult{}, auth.ErrLogonFailed
 	}
@@ -89,8 +100,8 @@ func (a *Authenticator) Accept(_ context.Context, token []byte) (auth.AcceptResu
 		Username: creds.UserName(),
 		Domain:   creds.Domain(),
 	}
-	if ad := creds.GetADCredentials(); len(ad.GroupMembershipSIDs) > 0 {
-		ident.Groups = append([]string(nil), ad.GroupMembershipSIDs...)
+	if groups := extractGroups(&mt.APReq, settings, a.wantPAC); len(groups) > 0 {
+		ident.Groups = groups
 	}
 
 	out, err := acceptCompletedToken()
@@ -133,4 +144,18 @@ func acceptCompletedToken() ([]byte, error) {
 		SupportedMech: gssapi.OIDKRB5.OID(),
 	}
 	return resp.Marshal()
+}
+
+func extractGroups(apreq *messages.APReq, settings *service.Settings, wantPAC bool) []string {
+	if !wantPAC || settings.Keytab == nil {
+		return nil
+	}
+	isPAC, pac, err := apreq.Ticket.GetPACType(settings.Keytab, settings.KeytabPrincipal(), settings.Logger())
+	if !isPAC || err != nil {
+		return nil
+	}
+	if sids := pac.KerbValidationInfo.GetGroupMembershipSIDs(); len(sids) > 0 {
+		return append([]string(nil), sids...)
+	}
+	return nil
 }
