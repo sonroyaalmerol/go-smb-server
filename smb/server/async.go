@@ -2,7 +2,6 @@ package server
 
 import (
 	"sync"
-	"time"
 
 	"github.com/sonroyaalmerol/go-smb-server/smb/wire"
 )
@@ -52,7 +51,7 @@ func (c *conn) cancelPending(asyncID uint64) *pendingOp {
 func (c *conn) sendFinal(msg []byte) {
 	select {
 	case c.asyncResp <- msg:
-	case <-time.After(5 * time.Second):
+	default:
 	}
 }
 

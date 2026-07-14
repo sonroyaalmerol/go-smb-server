@@ -66,12 +66,17 @@ type pipeHandle struct {
 	hasWrite bool
 	readBuf  []byte
 	readPos  int
+	closed   bool
 }
 
 func (h *pipeHandle) Read(ctx context.Context, offset int64, p []byte) (int, error) {
 	h.mu.Lock()
-	for !h.hasWrite && h.readPos >= len(h.readBuf) {
+	for !h.hasWrite && h.readPos >= len(h.readBuf) && !h.closed {
 		h.cond.Wait()
+	}
+	if h.closed {
+		h.mu.Unlock()
+		return 0, io.EOF
 	}
 
 	var data []byte
@@ -108,8 +113,10 @@ func (h *pipeHandle) Write(ctx context.Context, offset int64, p []byte) (int, er
 
 func (h *pipeHandle) Close(ctx context.Context) error {
 	h.mu.Lock()
+	h.closed = true
 	h.hasWrite = false
 	h.writeBuf = nil
+	h.readBuf = nil
 	h.mu.Unlock()
 	h.cond.Broadcast()
 	return nil

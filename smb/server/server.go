@@ -40,6 +40,9 @@ type Server struct {
 	requireEnc  bool
 	log         *slog.Logger
 	guid        [16]byte
+
+	mu       sync.Mutex
+	listener net.Listener
 }
 
 type Option func(*Server)
@@ -108,7 +111,15 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("server: listen %s: %w", s.addr, err)
 	}
-	defer ln.Close()
+	s.mu.Lock()
+	s.listener = ln
+	s.mu.Unlock()
+	defer func() {
+		s.mu.Lock()
+		s.listener = nil
+		s.mu.Unlock()
+		_ = ln.Close()
+	}()
 	s.log.Info("smb server listening", "addr", ln.Addr().String())
 
 	go func() {
@@ -130,6 +141,17 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 			s.serveConn(ctx, c)
 		})
 	}
+}
+
+func (s *Server) Shutdown() error {
+	s.mu.Lock()
+	ln := s.listener
+	s.listener = nil
+	s.mu.Unlock()
+	if ln != nil {
+		return ln.Close()
+	}
+	return nil
 }
 
 type session struct {
@@ -185,6 +207,9 @@ type conn struct {
 
 func (s *Server) serveConn(ctx context.Context, c net.Conn) {
 	defer c.Close()
+	connCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
 	sha := sha512.New()
 	sha.Write(nil)
 	cn := &conn{
@@ -198,6 +223,7 @@ func (s *Server) serveConn(ctx context.Context, c net.Conn) {
 		asyncResp:     make(chan []byte, 64),
 		preauthHash:   sha.Sum(nil),
 	}
+	defer cn.cleanup()
 
 	for {
 		if err := ctx.Err(); err != nil {
@@ -235,14 +261,14 @@ func (s *Server) serveConn(ctx context.Context, c net.Conn) {
 		}
 
 		cn.out = cn.out[:0]
-		cmd := uint16(0)
+		cmdBefore := uint16(0)
 		if len(msg) >= wire.HeaderSize {
-			cmd = binary.LittleEndian.Uint16(msg[12:14])
+			cmdBefore = binary.LittleEndian.Uint16(msg[12:14])
 		}
-		if cmd == wire.CmdNegotiate || cmd == wire.CmdSessionSetup {
+		if cmdBefore == wire.CmdNegotiate || cmdBefore == wire.CmdSessionSetup {
 			cn.updatePreauth(msg)
 		}
-		cn.handleMessage(ctx, msg)
+		cn.handleMessage(connCtx, msg)
 		if len(cn.out) > 0 {
 			if sealed, ok := cn.maybeSealResponse(cn.out); ok {
 				cn.out = sealed
@@ -409,6 +435,24 @@ func fileIdOffset(cmd uint16) int {
 }
 
 func (c *conn) getSession(id uint64) *session { return c.sessions[id] }
+
+func (c *conn) cleanup() {
+	c.pendingMu.Lock()
+	for _, op := range c.pending {
+		op.cancel()
+	}
+	c.pending = nil
+	c.pendingByMsg = nil
+	c.pendingMu.Unlock()
+
+	ctx := context.Background()
+	for _, sess := range c.sessions {
+		for _, tr := range sess.trees {
+			c.closeAllOpens(tr)
+		}
+	}
+	_ = ctx
+}
 
 func (c *conn) updatePreauth(msg []byte) {
 	if len(c.preauthHash) == 0 {
