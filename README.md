@@ -52,6 +52,7 @@ Runnable examples at [`examples/`](examples/).
 │  smb/auth    │      smb/vfs             │
 │ Authenticator│  Backend / Handle / Share│
 │ RelayAuth    │  PipeBackend             │
+│ Kerberos     │                          │
 ├──────────────┴──────────────────────────┤
 │              smb/wire                   │
 │  SMB2 header, all command codecs,       │
@@ -63,7 +64,8 @@ Runnable examples at [`examples/`](examples/).
 
 Supporting packages:
   smb/ntlmssp    — NTLMv2 protocol implementation
-  smb/signing    — AES-128-CMAC and HMAC-SHA256 signing
+  smb/kerberos   — Kerberos v5 / SPNEGO acceptor (gokrb5)
+  smb/signing    — AES-128-CMAC message signing
   smb/encryption — AES-128-CCM message encryption
 ```
 

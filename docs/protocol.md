@@ -4,18 +4,21 @@
 
 | Dialect | Constant | Status |
 |---------|----------|--------|
-| SMB 2.0.2 | `DialectSMB202` | ✅ Signing via HMAC-SHA256 |
+| SMB 2.0.2 | `DialectSMB202` | ✅ |
 | SMB 2.1 | `DialectSMB21` | ✅ |
-| SMB 3.0 | `DialectSMB30` | ✅ AES-CMAC signing, AES-CCM encryption |
+| SMB 3.0 | `DialectSMB30` | ✅ AES-128-CMAC signing, AES-CCM encryption |
 | SMB 3.0.2 | `DialectSMB302` | ✅ Default |
 | SMB 3.1.1 | `DialectSMB311` | ✅ Preauth integrity (SHA-512) |
+
+Signing is implemented as AES-128-CMAC only (the SMB3 algorithm). See
+[Encryption & signing](encryption.md).
 
 ## Commands
 
 | Code | Command | Status |
 |------|---------|--------|
 | 0x00 | NEGOTIATE | ✅ |
-| 0x01 | SESSION_SETUP | ✅ SPNEGO + NTLMv2 |
+| 0x01 | SESSION_SETUP | ✅ SPNEGO: NTLMv2 or Kerberos |
 | 0x02 | LOGOFF | ✅ |
 | 0x03 | TREE_CONNECT | ✅ |
 | 0x04 | TREE_DISCONNECT | ✅ |
@@ -96,7 +99,11 @@ its read buffer and header buffer across messages — zero per-read allocation.
 ## Leak guarantees
 
 - Per-connection child context cancelled on disconnect
-- `cleanup()` closes all file handles, cancels all pending ops
-- `sendFinal` / `sendOplockBreak` use non-blocking channel sends
-- `pipeHandle.Close` unblocks waiting `Read` calls
+- `cleanup()` closes all file handles and cancels every pending op
+- `sendFinal` / `sendOplockBreak` block until the response is queued **or** the
+  connection tears down (via a `connDone` channel closed in `cleanup`), so
+  async completions are never silently dropped and no sender goroutine leaks
+- Named-pipe `Read` is non-blocking; a single goroutine serves each connection,
+  so a blocking read would deadlock — clients drive RPC pipes via
+  `FSCTL_PIPE_TRANSCEIVE`
 - Verified by `TestNoLeakOnDisconnect`, `TestNoLeakOnGracefulShutdown`

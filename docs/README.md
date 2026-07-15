@@ -23,7 +23,7 @@ srv.ListenAndServe(ctx)
 | Document | Covers |
 |----------|--------|
 | [Server configuration](server.md) | `server.New()`, options, `Shutdown()`, compound requests |
-| [Authentication](auth.md) | `Authenticator`, NTLMSSP, relay auth, LDAP, custom |
+| [Authentication](auth.md) | `Authenticator`, NTLMSSP, Kerberos, relay auth, LDAP, custom |
 | [Virtual filesystem](vfs.md) | `Backend`, `Handle`, optional interfaces, `PipeBackend` |
 | [Encryption & signing](encryption.md) | AES-128-CCM, `Signer` type, key derivation |
 | [Protocol support](protocol.md) | Commands, dialects, FSCTLs, oplocks, preauth |
