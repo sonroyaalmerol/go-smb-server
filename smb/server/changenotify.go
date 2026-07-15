@@ -29,14 +29,14 @@ const (
 	fileActionRenamed  uint32 = 0x00000004
 )
 
-type ChangeNotifyRequest struct {
+type changeNotifyRequest struct {
 	Flags              uint16
 	OutputBufferLength uint32
 	FileId             [16]byte
 	CompletionFilter   uint32
 }
 
-func (r *ChangeNotifyRequest) Parse(msg []byte) error {
+func (r *changeNotifyRequest) Parse(msg []byte) error {
 	if len(msg) < 64+32 {
 		return errors.New("wire: change_notify needs 32 bytes")
 	}
@@ -54,7 +54,7 @@ type notifyEvent struct {
 }
 
 func (c *conn) handleChangeNotify(ctx context.Context, msg []byte, hdr *wire.Header, tr *tree) (uint32, bool) {
-	var req ChangeNotifyRequest
+	var req changeNotifyRequest
 	if err := req.Parse(msg); err != nil {
 		return c.errBody(wire.StatusInvalidParameter), false
 	}
@@ -71,7 +71,7 @@ func (c *conn) handleChangeNotify(ctx context.Context, msg []byte, hdr *wire.Hea
 	return wire.StatusPending, true
 }
 
-func (c *conn) watchDirectory(ctx context.Context, op *pendingOp, hdr wire.Header, h vfs.Handle, snap map[string]uint64, req ChangeNotifyRequest) {
+func (c *conn) watchDirectory(ctx context.Context, op *pendingOp, hdr wire.Header, h vfs.Handle, snap map[string]uint64, req changeNotifyRequest) {
 	ticker := time.NewTicker(500 * time.Millisecond)
 	defer ticker.Stop()
 

@@ -6,7 +6,6 @@ import (
 	"errors"
 	"strings"
 
-	//lint:file-ignore SA1019 MD4 is required by NTLMSSP (MS-NLMP); cannot use SHA-256
 	"golang.org/x/crypto/md4"
 )
 

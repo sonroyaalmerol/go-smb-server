@@ -5,7 +5,7 @@ import (
 )
 
 func BenchmarkSign(b *testing.B) {
-	s, err := NewSigner(make([]byte, 16), AlgoAESCMAC)
+	s, err := NewSigner(make([]byte, 16))
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -23,7 +23,7 @@ func BenchmarkSign(b *testing.B) {
 }
 
 func BenchmarkVerify(b *testing.B) {
-	s, err := NewSigner(make([]byte, 16), AlgoAESCMAC)
+	s, err := NewSigner(make([]byte, 16))
 	if err != nil {
 		b.Fatal(err)
 	}

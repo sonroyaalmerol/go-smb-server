@@ -135,12 +135,12 @@ func (b *LocalBackend) CopyChunk(_ context.Context, srcPath string, srcOffset, d
 	if err != nil {
 		return err
 	}
-	defer src.Close()
+	defer func() { _ = src.Close() }()
 	dst, err := os.OpenFile(dstFull, os.O_WRONLY, 0)
 	if err != nil {
 		return err
 	}
-	defer dst.Close()
+	defer func() { _ = dst.Close() }()
 	var buf [65536]byte
 	remaining := length
 	for remaining > 0 {

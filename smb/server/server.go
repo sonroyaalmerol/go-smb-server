@@ -206,7 +206,7 @@ type conn struct {
 }
 
 func (s *Server) serveConn(ctx context.Context, c net.Conn) {
-	defer c.Close()
+	defer func() { _ = c.Close() }()
 	connCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 

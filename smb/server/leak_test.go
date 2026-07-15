@@ -46,7 +46,7 @@ func startTestServer(t *testing.T) (*Server, net.Listener, context.CancelFunc, <
 	}()
 	return srv, ln, func() {
 		cancel()
-		ln.Close()
+		_ = ln.Close()
 		<-done
 	}, done
 }
@@ -74,7 +74,7 @@ func TestNoLeakOnDisconnect(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		conn.Close()
+		_ = conn.Close()
 	}
 
 	waitForGoroutineDrop(t, before)

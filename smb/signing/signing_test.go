@@ -34,7 +34,7 @@ func TestCMACSubkeys(t *testing.T) {
 }
 
 func TestCMACEmptyMessage(t *testing.T) {
-	s, err := NewSigner(rfcKey, AlgoAESCMAC)
+	s, err := NewSigner(rfcKey)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -45,7 +45,7 @@ func TestCMACEmptyMessage(t *testing.T) {
 }
 
 func TestCMACOneBlock(t *testing.T) {
-	s, err := NewSigner(rfcKey, AlgoAESCMAC)
+	s, err := NewSigner(rfcKey)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -60,7 +60,7 @@ func TestSignVerifyRoundTrip(t *testing.T) {
 	copy(msg[0:4], []byte{0xFE, 'S', 'M', 'B'})
 	key := []byte("0123456789abcdef")
 
-	s, err := NewSigner(key, AlgoAESCMAC)
+	s, err := NewSigner(key)
 	if err != nil {
 		t.Fatal(err)
 	}

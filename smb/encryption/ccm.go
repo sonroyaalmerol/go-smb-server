@@ -101,14 +101,6 @@ func macBlocks(block cipher.Block, state [16]byte, buf []byte) [16]byte {
 	return state
 }
 
-func encodeAADLength(aad []byte) []byte {
-	n := len(aad)
-	if n < 0xFF00 {
-		return []byte{byte(n >> 8), byte(n)}
-	}
-	return []byte{0xFF, 0xFE, byte(n >> 24), byte(n >> 16), byte(n >> 8), byte(n)}
-}
-
 func encodeAADLengthInto(buf, aad []byte) []byte {
 	n := len(aad)
 	var off int
@@ -129,30 +121,10 @@ func encodeAADLengthInto(buf, aad []byte) []byte {
 	return buf[:off+len(aad)]
 }
 
-func ctrBlock(block cipher.Block, nonce []byte, counter uint64) []byte {
-	l := 15 - len(nonce)
-	var ai [16]byte
-	ai[0] = byte(l - 1)
-	copy(ai[1:], nonce)
-	putBE(ai[16-l:16], counter)
-	var s [16]byte
-	block.Encrypt(s[:], ai[:])
-	return s[:]
-}
-
 func xorBlock16(dst, src []byte) {
 	for i := range 16 {
 		dst[i] ^= src[i]
 	}
-}
-
-func xorBytes(a, b []byte) []byte {
-	n := min(len(b), len(a))
-	out := make([]byte, n)
-	for i := range n {
-		out[i] = a[i] ^ b[i]
-	}
-	return out
 }
 
 func putBE(dst []byte, v uint64) {

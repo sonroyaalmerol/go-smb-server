@@ -103,7 +103,7 @@ func signedTreeConnect(sessID uint64, msgID uint64, share string, signKey []byte
 	copy(body[8:], pathBytes)
 	m := hdr.Append(nil)
 	m = append(m, body...)
-	s, _ := signing.NewSigner(signKey, signing.AlgoAESCMAC)
+	s, _ := signing.NewSigner(signKey)
 	_ = s.Sign(m)
 	return m
 }
@@ -113,7 +113,7 @@ func TestKerberosE2E_SessionSetupAndSigning(t *testing.T) {
 	token, sessionKey := buildKerbToken(t, kt)
 
 	client, srvConn := newPipeConns()
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 	defer serveOn(newKerbTestServer(t, newMemBackend(), kt), srvConn)()
 
 	fc := transport.NewFramedConn(client)
@@ -159,7 +159,7 @@ func TestKerberosE2E_SessionSetupAndSigning(t *testing.T) {
 func TestKerberosE2E_RejectsBadToken(t *testing.T) {
 	kt := newKerbTestKeytab(t)
 	client, srvConn := newPipeConns()
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 	defer serveOn(newKerbTestServer(t, newMemBackend(), kt), srvConn)()
 
 	fc := transport.NewFramedConn(client)

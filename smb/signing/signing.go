@@ -7,48 +7,29 @@ import (
 	"errors"
 )
 
-type Algorithm uint16
-
-const (
-	AlgoHMACSHA256 Algorithm = 0x0000
-	AlgoAESCMAC    Algorithm = 0x0001
-)
-
 const headerSize = 64
 
 var errShort = errors.New("signing: message shorter than header")
 
 type Signer struct {
-	block    [16]byte
-	algo     Algorithm
 	aesBlock interface{ Encrypt(dst, src []byte) }
 	cmacK1   [16]byte
 	cmacK2   [16]byte
-	hmacKey  []byte
 }
 
-func NewSigner(key []byte, algo Algorithm) (*Signer, error) {
-	s := &Signer{algo: algo}
-	switch algo {
-	case AlgoAESCMAC:
-		if len(key) != 16 {
-			return nil, errors.New("signing: AES-128-CMAC requires a 16-byte key")
-		}
-		copy(s.block[:], key)
-		blk, err := aes.NewCipher(key)
-		if err != nil {
-			return nil, err
-		}
-		s.aesBlock = blk
-		var l [16]byte
-		blk.Encrypt(l[:], l[:])
-		s.cmacK1 = cmacShift(l)
-		s.cmacK2 = cmacShift(s.cmacK1)
-	case AlgoHMACSHA256:
-		s.hmacKey = key
-	default:
-		return nil, errors.New("signing: unsupported algorithm")
+func NewSigner(key []byte) (*Signer, error) {
+	if len(key) != 16 {
+		return nil, errors.New("signing: AES-128-CMAC requires a 16-byte key")
 	}
+	blk, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, err
+	}
+	s := &Signer{aesBlock: blk}
+	var l [16]byte
+	blk.Encrypt(l[:], l[:])
+	s.cmacK1 = cmacShift(l)
+	s.cmacK2 = cmacShift(s.cmacK1)
 	return s, nil
 }
 
@@ -59,15 +40,7 @@ func (s *Signer) Sign(msg []byte) error {
 	for i := 48; i < 64; i++ {
 		msg[i] = 0
 	}
-	var sig [16]byte
-	switch s.algo {
-	case AlgoHMACSHA256:
-		mac := hmac.New(sha256.New, s.hmacKey)
-		mac.Write(msg)
-		copy(sig[:], mac.Sum(nil)[:16])
-	case AlgoAESCMAC:
-		sig = s.cmac(msg)
-	}
+	sig := s.cmac(msg)
 	copy(msg[48:64], sig[:])
 	return nil
 }

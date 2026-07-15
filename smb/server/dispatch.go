@@ -184,7 +184,7 @@ func (c *conn) handleSessionSetup(ctx context.Context, msg []byte, hdr *wire.Hea
 	if result.Identity != nil {
 		sess.identity = result.Identity
 		sess.authenticated = true
-		sess.signer, _ = signing.NewSigner(signing.DeriveSigningKey(result.SessionKey), signing.AlgoAESCMAC)
+		sess.signer, _ = signing.NewSigner(signing.DeriveSigningKey(result.SessionKey))
 		sess.encryptionKey = encryption.DeriveServerEncryptionKey(result.SessionKey)
 		sess.decryptionKey = encryption.DeriveServerDecryptionKey(result.SessionKey)
 		sess.requireEncrypt = c.srv.requireEnc
@@ -458,7 +458,7 @@ func (c *conn) handleQueryDirectory(ctx context.Context, msg []byte, tr *tree) u
 	c.out = append(c.out, make([]byte, bodyFixed)...)
 	bufStart := len(c.out)
 
-	var prevEntryStart int = -1
+	var prevEntryStart = -1
 	empty := true
 	for fi, err := range oh.h.Enumerate(ctx, pattern) {
 		if err != nil {

@@ -87,7 +87,7 @@ func mustWrite(t *testing.T, fc *transport.FramedConn, msg []byte) {
 
 func TestEndToEnd_Negotiate(t *testing.T) {
 	client, srvConn := newPipeConns()
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 	srv := newTestServer(newMemBackend())
 	cancel := serveOn(srv, srvConn)
 	defer cancel()
@@ -117,7 +117,7 @@ func TestEndToEnd_Negotiate(t *testing.T) {
 func TestEndToEnd_FullConversation(t *testing.T) {
 	backend := newMemBackend()
 	client, srvConn := newPipeConns()
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 	srv := newTestServer(backend)
 	cancel := serveOn(srv, srvConn)
 	defer cancel()
@@ -313,7 +313,7 @@ func TestEndToEnd_QueryDirectory(t *testing.T) {
 	}
 
 	client, srvConn := newPipeConns()
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 	defer serveOn(newTestServer(backend), srvConn)()
 
 	fc := transport.NewFramedConn(client)
@@ -398,7 +398,7 @@ func parseDirInfoNames(buf []byte) []string {
 func TestEndToEnd_QueryInfoAndDeleteOnClose(t *testing.T) {
 	backend := newMemBackend()
 	client, srvConn := newPipeConns()
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 	defer serveOn(newTestServer(backend), srvConn)()
 
 	fc := transport.NewFramedConn(client)
@@ -487,7 +487,7 @@ func buildSetInfo(sessID uint64, treeID uint32, fid [16]byte, class uint8, buf [
 func TestEndToEnd_LockConflict(t *testing.T) {
 	backend := newMemBackend()
 	client, srvConn := newPipeConns()
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 	defer serveOn(newTestServer(backend), srvConn)()
 
 	fc := transport.NewFramedConn(client)
@@ -567,7 +567,7 @@ func TestEndToEnd_ChangeNotify(t *testing.T) {
 	}
 
 	client, srvConn := newPipeConns()
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 	defer serveOn(newTestServer(backend), srvConn)()
 
 	fc := transport.NewFramedConn(client)
