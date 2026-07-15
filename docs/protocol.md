@@ -52,15 +52,15 @@ Signing is implemented as AES-128-CMAC only (the SMB3 algorithm). See
 | Class | Name | Q | S |
 |-------|------|---|---|
 | 0x04 | FileBasicInformation | ✅ | ✅ |
-| 0x05 | FileStandardInformation | ✅ | — |
-| 0x0A | FileRenameInformation | — | ✅ |
-| 0x0D | FileDispositionInformation | — | ✅ |
-| 0x12 | FileAllInformation | ✅ | — |
-| 0x14 | FileEndOfFileInformation | — | ✅ |
-| 0x22 | FileNetworkOpenInformation | ✅ | — |
-| 0x01 | FileFsAttributeInformation | ✅ | — |
-| 0x03 | FileFsSizeInformation | ✅ | — |
-| 0x01 | FileFsVolumeInformation | ✅ | — |
+| 0x05 | FileStandardInformation | ✅ | - |
+| 0x0A | FileRenameInformation | - | ✅ |
+| 0x0D | FileDispositionInformation | - | ✅ |
+| 0x12 | FileAllInformation | ✅ | - |
+| 0x14 | FileEndOfFileInformation | - | ✅ |
+| 0x22 | FileNetworkOpenInformation | ✅ | - |
+| 0x01 | FileFsAttributeInformation | ✅ | - |
+| 0x03 | FileFsSizeInformation | ✅ | - |
+| 0x01 | FileFsVolumeInformation | ✅ | - |
 
 ## Oplocks
 
@@ -94,7 +94,8 @@ context advertised for dialect 3.1.1.
 ## Transport
 
 Direct-TCP (port 445) with 4-byte length-prefixed framing. `FramedConn` reuses
-its read buffer and header buffer across messages — zero per-read allocation.
+its read buffer and header buffer across messages, with zero per-read
+allocation.
 
 ## Leak guarantees
 
@@ -104,6 +105,6 @@ its read buffer and header buffer across messages — zero per-read allocation.
   connection tears down (via a `connDone` channel closed in `cleanup`), so
   async completions are never silently dropped and no sender goroutine leaks
 - Named-pipe `Read` is non-blocking; a single goroutine serves each connection,
-  so a blocking read would deadlock — clients drive RPC pipes via
+  so a blocking read would deadlock; clients drive RPC pipes via
   `FSCTL_PIPE_TRANSCEIVE`
 - Verified by `TestNoLeakOnDisconnect`, `TestNoLeakOnGracefulShutdown`

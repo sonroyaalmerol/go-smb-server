@@ -92,7 +92,7 @@ share := vfs.NewDiskShare("IPC$", pb)
 The server auto-registers `IPC$` with a `srvsvc` handler during `server.New()`.
 The handler processes DCE/RPC BIND and NetrShareEnum requests.
 
-`PipeProcessor` is the interface for custom pipe handlers — it receives raw
+`PipeProcessor` is the interface for custom pipe handlers: it receives raw
 DCE/RPC input via `FSCTL_PIPE_TRANSCEIVE` and returns the response.
 
 ## Custom backend example

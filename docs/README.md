@@ -1,4 +1,4 @@
-# go-smb-server — Documentation
+# go-smb-server Documentation
 
 An SMB2/3 server library for Go. Export any filesystem backend over SMB with
 pluggable authentication. Built from the [Microsoft Open Specifications](../specs/).

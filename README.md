@@ -10,8 +10,8 @@ custom content store) and authenticate against any credential source.
 
 ## Status
 
-Full SMB2/3 file serving — all core commands, signing, encryption, oplocks,
-preauth integrity — tested against smbclient (Samba 4.24) and the go-smb2
+Full SMB2/3 file serving: all core commands, signing, encryption, oplocks,
+and preauth integrity. Tested against smbclient (Samba 4.24) and the go-smb2
 reference client.
 
 ## Quick start
@@ -63,17 +63,17 @@ Runnable examples at [`examples/`](examples/).
 └─────────────────────────────────────────┘
 
 Supporting packages:
-  smb/ntlmssp    — NTLMv2 protocol implementation
-  smb/kerberos   — Kerberos v5 / SPNEGO acceptor (gokrb5)
-  smb/signing    — AES-128-CMAC message signing
-  smb/encryption — AES-128-CCM message encryption
+  smb/ntlmssp    - NTLMv2 protocol implementation
+  smb/kerberos   - Kerberos v5 / SPNEGO acceptor (gokrb5)
+  smb/signing    - AES-128-CMAC message signing
+  smb/encryption - AES-128-CCM message encryption
 ```
 
 ## Design
 
 - **Zero-allocation hot paths**. READ writes directly into the response buffer; CCM
   encrypts in-place; header encode/parse is allocation-free.
-- **Caller-owned buffers**. Encoding uses `Append(b []byte) []byte` — the caller
+- **Caller-owned buffers**. Encoding uses `Append(b []byte) []byte`; the caller
   allocates and the encoder appends. Zero-copy parsing aliases the message buffer.
 - **Pluggable boundaries**. Two interfaces drive all extensibility:
   `auth.Authenticator` (who can connect) and `vfs.Backend` (what they see).
@@ -86,8 +86,8 @@ Supporting packages:
 | Client | Auth | Encryption | Operations verified |
 |--------|------|------------|---------------------|
 | `go-smb2` (reference) | NTLMv2 | AES-128-CCM | Full interop |
-| `smbclient` (Samba 4.24) | NTLMv2 | — | ls, get, put, mkdir, rm, rmdir |
-| `smbclient` share enum | NTLMv2 | — | BIND succeeds, NDR share listing in progress |
+| `smbclient` (Samba 4.24) | NTLMv2 | - | ls, get, put, mkdir, rm, rmdir |
+| `smbclient` share enum | NTLMv2 | - | BIND succeeds, NDR share listing in progress |
 
 ## Performance (i5-7300HQ, 4KB payload)
 
@@ -96,8 +96,8 @@ Supporting packages:
 | CCM Seal | 203 MB/s | 8 |
 | CCM Open | 235 MB/s | 7 |
 | CMAC Sign | 446 MB/s | 4 |
-| Header encode | — | 0 |
-| Header parse | — | 0 |
+| Header encode | - | 0 |
+| Header parse | - | 0 |
 | READ response | 47 GB/s | 0 |
 
 ## License

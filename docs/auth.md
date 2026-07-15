@@ -69,7 +69,7 @@ if err != nil { /* ... */ }
 server.WithAuth(kerberos.NewServer(kt))
 ```
 
-The keytab must hold the service principal's long-term key — the entry the
+The keytab must hold the service principal's long-term key: the entry the
 KDC issued a service ticket for, typically `cifs/<host>@REALM`. By default the
 principal is taken from the ticket itself; override it with an option:
 
@@ -93,7 +93,7 @@ when the ticket carries a decodable (AD-style) PAC.
 **PAC handling:** the accept/reject decision never depends on the PAC. PAC
 decoding is best-effort attribute extraction, so a ticket that carries a PAC
 which gokrb5 cannot fully decode (notably MIT-KDC PACs that omit the
-AD-specific KerbValidationInfo buffer) still authenticates successfully — it
+AD-specific KerbValidationInfo buffer) still authenticates successfully; it
 simply yields no group SIDs. This was verified end-to-end against a real MIT
 `krb5kdc`.
 
@@ -112,8 +112,8 @@ attacks.
 
 The idiomatic path is to **share the service key**: export the `cifs/`
 principal from the domain into a keytab and load it here. This server then
-validates client tickets directly against the same KDC — full SMB3 signing and
-encryption, no Samba process required at runtime.
+validates client tickets directly against the same KDC, with full SMB3 signing
+and encryption, no Samba process required at runtime.
 
 ```sh
 # On a Samba AD DC (as domain admin):
@@ -135,8 +135,8 @@ Clients must request a ticket for the same principal. See
 
 ## Relay authentication (no plaintext password)
 
-When the identity provider doesn't expose plaintext passwords or NT hashes —
-for example Authentik LDAP outposts — use `auth.NewRelayAuthenticator` to
+When the identity provider doesn't expose plaintext passwords or NT hashes
+(for example, Authentik LDAP outposts), use `auth.NewRelayAuthenticator` to
 forward the SPNEGO/NTLMSSP exchange to an external service.
 
 NTLMv2 is a challenge-response protocol: validating requires the NT hash. If

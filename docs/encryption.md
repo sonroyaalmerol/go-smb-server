@@ -6,12 +6,12 @@ SMB3 provides message signing and encryption for integrity and confidentiality.
 
 The library implements SMB3 **AES-128-CMAC** signing, the algorithm mandated
 for dialects 3.0 and above. (The SMB 2.0.2/2.1 HMAC-SHA256 signing path is not
-implemented — signing is keyed and computed the SMB3 way regardless of the
+implemented; signing is keyed and computed the SMB3 way regardless of the
 negotiated dialect, so use 3.0+ when you need integrity.)
 
 | Dialect | Protocol algorithm | Implemented |
 |---------|--------------------|-------------|
-| 2.0.2, 2.1 | HMAC-SHA256 | — |
+| 2.0.2, 2.1 | HMAC-SHA256 | - |
 | 3.0, 3.0.2, 3.1.1 | AES-128-CMAC | ✅ SP800-108 KDF from session key |
 
 ### Signer type (cached, per-session)
