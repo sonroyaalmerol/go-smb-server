@@ -101,6 +101,38 @@ simply yields no group SIDs. This was verified end-to-end against a real MIT
 configured for either NTLMSSP or Kerberos, not both. A client must then offer
 the matching mechanism in its SPNEGO mech list.
 
+### Authenticating against an existing Samba / Active Directory domain
+
+There is no Kerberos equivalent of the NTLM relay authenticator, and there
+cannot be: a Kerberos service ticket is encrypted for one service principal's
+long-term key, and the SMB session key lives inside it. Only the holder of that
+key can recover it, so a client's token can't be forwarded to a separate Samba
+server and validated there. That binding is exactly how Kerberos defeats relay
+attacks.
+
+The idiomatic path is to **share the service key**: export the `cifs/`
+principal from the domain into a keytab and load it here. This server then
+validates client tickets directly against the same KDC — full SMB3 signing and
+encryption, no Samba process required at runtime.
+
+```sh
+# On a Samba AD DC (as domain admin):
+samba-tool domain exportkeytab /etc/krb5.smb.keytab \
+  --principal=cifs/fs.corp.example.com
+# Or on a domain-joined member:
+net ads keytab add cifs/fs.corp.example.com -U admin
+```
+
+```go
+kt, err := keytab.Load("/etc/krb5.smb.keytab")
+if err != nil { /* ... */ }
+server.WithAuth(kerberos.NewServer(kt))
+```
+
+Clients must request a ticket for the same principal. See
+`examples/samba-kerberos-auth` for a runnable end-to-end sample, including the
+`--spn` (explicit keytab lookup) and `--no-pac` (MIT/non-AD KDC) flags.
+
 ## Relay authentication (no plaintext password)
 
 When the identity provider doesn't expose plaintext passwords or NT hashes —

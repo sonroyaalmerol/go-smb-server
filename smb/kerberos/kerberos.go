@@ -45,33 +45,29 @@ func NewServer(kt *keytab.Keytab, opts ...Option) auth.Factory {
 	for _, o := range opts {
 		o(cfg)
 	}
+	settingsOpts := make([]func(*service.Settings), 0, len(cfg.settings)+1)
+	settingsOpts = append(settingsOpts, cfg.settings...)
+	settingsOpts = append(settingsOpts, service.DecodePAC(false))
+	settings := service.NewSettings(kt, settingsOpts...)
+	wantPAC := !cfg.noPAC
 	return func() auth.Authenticator {
-		return &Authenticator{keytab: kt, opts: cfg.settings, wantPAC: !cfg.noPAC}
+		return &Authenticator{settings: settings, wantPAC: wantPAC}
 	}
 }
 
 type Authenticator struct {
-	keytab  *keytab.Keytab
-	opts    []func(*service.Settings)
-	wantPAC bool
-	done    bool
-}
-
-func (a *Authenticator) verifySettings() *service.Settings {
-	opts := make([]func(*service.Settings), 0, len(a.opts)+1)
-	opts = append(opts, a.opts...)
-	opts = append(opts, service.DecodePAC(false))
-	return service.NewSettings(a.keytab, opts...)
+	settings *service.Settings
+	wantPAC  bool
+	done     bool
 }
 
 func (a *Authenticator) Accept(_ context.Context, token []byte) (auth.AcceptResult, error) {
 	if a.done {
 		return auth.AcceptResult{}, errors.New("kerberos: security context already established")
 	}
-	if a.keytab == nil {
+	if a.settings == nil || a.settings.Keytab == nil {
 		return auth.AcceptResult{}, fmt.Errorf("kerberos: no service keytab configured")
 	}
-	settings := a.verifySettings()
 
 	mech, err := extractMechToken(token)
 	if err != nil {
@@ -86,7 +82,7 @@ func (a *Authenticator) Accept(_ context.Context, token []byte) (auth.AcceptResu
 		return auth.AcceptResult{}, auth.ErrLogonFailed
 	}
 
-	ok, creds, err := service.VerifyAPREQ(&mt.APReq, settings)
+	ok, creds, err := service.VerifyAPREQ(&mt.APReq, a.settings)
 	if err != nil || !ok {
 		return auth.AcceptResult{}, auth.ErrLogonFailed
 	}
@@ -100,7 +96,7 @@ func (a *Authenticator) Accept(_ context.Context, token []byte) (auth.AcceptResu
 		Username: creds.UserName(),
 		Domain:   creds.Domain(),
 	}
-	if groups := extractGroups(&mt.APReq, settings, a.wantPAC); len(groups) > 0 {
+	if groups := extractGroups(&mt.APReq, a.settings, a.wantPAC); len(groups) > 0 {
 		ident.Groups = groups
 	}
 

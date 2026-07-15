@@ -1,1 +1,12 @@
 specs/
+
+# example build artifacts
+/custom-auth
+/encrypted
+/kerberos-auth
+/localdisk
+/mem-backend
+/multi-share
+/ntlm-auth
+/relay-auth
+/samba-kerberos-auth
