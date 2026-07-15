@@ -114,45 +114,6 @@ func (s *Signer) cmac(msg []byte) [16]byte {
 	return out
 }
 
-func Sign(msg []byte, key []byte, algo Algorithm) error {
-	if len(msg) < headerSize {
-		return errShort
-	}
-	var sig [16]byte
-	switch algo {
-	case AlgoHMACSHA256:
-		mac := hmac.New(sha256.New, key)
-		mac.Write(msg)
-		copy(sig[:], mac.Sum(nil)[:16])
-	case AlgoAESCMAC:
-		s, err := NewSigner(key, algo)
-		if err != nil {
-			return err
-		}
-		orig := [16]byte(msg[48:64])
-		for i := 48; i < 64; i++ {
-			msg[i] = 0
-		}
-		sig = s.cmac(msg)
-		copy(msg[48:64], orig[:])
-	default:
-		return errors.New("signing: unsupported algorithm")
-	}
-	copy(msg[48:64], sig[:])
-	return nil
-}
-
-func Verify(msg []byte, key []byte, algo Algorithm) (bool, error) {
-	if len(msg) < headerSize {
-		return false, errShort
-	}
-	want := [16]byte(msg[48:64])
-	if err := Sign(msg, key, algo); err != nil {
-		return false, err
-	}
-	return constantEqual(want[:], msg[48:64]), nil
-}
-
 func constantEqual(a, b []byte) bool {
 	if len(a) != len(b) {
 		return false

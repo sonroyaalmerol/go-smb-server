@@ -60,7 +60,11 @@ func TestSignVerifyRoundTrip(t *testing.T) {
 	copy(msg[0:4], []byte{0xFE, 'S', 'M', 'B'})
 	key := []byte("0123456789abcdef")
 
-	if err := Sign(msg, key, AlgoAESCMAC); err != nil {
+	s, err := NewSigner(key, AlgoAESCMAC)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Sign(msg); err != nil {
 		t.Fatal(err)
 	}
 	if isZero(msg[48:64]) {
@@ -70,7 +74,7 @@ func TestSignVerifyRoundTrip(t *testing.T) {
 	saved := make([]byte, len(msg))
 	copy(saved, msg)
 	msg[65] ^= 0xFF
-	ok, err := Verify(msg, key, AlgoAESCMAC)
+	ok, err := s.Verify(msg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -79,7 +83,7 @@ func TestSignVerifyRoundTrip(t *testing.T) {
 	}
 
 	copy(msg, saved)
-	ok, err = Verify(msg, key, AlgoAESCMAC)
+	ok, err = s.Verify(msg)
 	if err != nil {
 		t.Fatal(err)
 	}

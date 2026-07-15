@@ -184,8 +184,7 @@ func (c *conn) handleSessionSetup(ctx context.Context, msg []byte, hdr *wire.Hea
 	if result.Identity != nil {
 		sess.identity = result.Identity
 		sess.authenticated = true
-		sess.signingKey = signing.DeriveSigningKey(result.SessionKey)
-		sess.signingAlgo = signing.AlgoAESCMAC
+		sess.signer, _ = signing.NewSigner(signing.DeriveSigningKey(result.SessionKey), signing.AlgoAESCMAC)
 		sess.encryptionKey = encryption.DeriveServerEncryptionKey(result.SessionKey)
 		sess.decryptionKey = encryption.DeriveServerDecryptionKey(result.SessionKey)
 		sess.requireEncrypt = c.srv.requireEnc

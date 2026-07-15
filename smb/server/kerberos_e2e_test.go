@@ -103,7 +103,8 @@ func signedTreeConnect(sessID uint64, msgID uint64, share string, signKey []byte
 	copy(body[8:], pathBytes)
 	m := hdr.Append(nil)
 	m = append(m, body...)
-	_ = signing.Sign(m, signKey, signing.AlgoAESCMAC)
+	s, _ := signing.NewSigner(signKey, signing.AlgoAESCMAC)
+	_ = s.Sign(m)
 	return m
 }
 
