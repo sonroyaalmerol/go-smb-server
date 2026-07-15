@@ -25,6 +25,8 @@ const (
 	defaultMaxRead     uint32 = 1 << 20
 	defaultMaxWrite    uint32 = 1 << 20
 	defaultMaxCredits  uint32 = 8192
+
+	cleanupCloseTimeout = 5 * time.Second
 )
 
 type Server struct {
@@ -447,9 +449,11 @@ func (c *conn) cleanup() {
 	c.pendingByMsg = nil
 	c.pendingMu.Unlock()
 
+	ctx, cancel := context.WithTimeout(context.Background(), cleanupCloseTimeout)
+	defer cancel()
 	for _, sess := range c.sessions {
 		for _, tr := range sess.trees {
-			c.closeAllOpens(tr)
+			c.closeAllOpens(ctx, tr)
 		}
 	}
 }

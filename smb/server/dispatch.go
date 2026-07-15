@@ -38,11 +38,11 @@ func (c *conn) dispatch(ctx context.Context, msg []byte, hdr *wire.Header, lastF
 	case wire.CmdSessionSetup:
 		return c.handleSessionSetup(ctx, msg, hdr)
 	case wire.CmdLogoff:
-		return c.handleLogoff(hdr, sess)
+		return c.handleLogoff(ctx, hdr, sess)
 	case wire.CmdTreeConnect:
 		return c.handleTreeConnect(msg, hdr, sess)
 	case wire.CmdTreeDisconnect:
-		return c.handleTreeDisconnect(hdr, sess, tr)
+		return c.handleTreeDisconnect(ctx, hdr, sess, tr)
 	case wire.CmdCreate:
 		return c.handleCreate(ctx, msg, hdr, tr, lastFileId)
 	case wire.CmdClose:
@@ -196,10 +196,10 @@ func (c *conn) handleSessionSetup(ctx context.Context, msg []byte, hdr *wire.Hea
 	return wire.StatusMoreProcessingRequired
 }
 
-func (c *conn) handleLogoff(hdr *wire.Header, sess *session) uint32 {
+func (c *conn) handleLogoff(ctx context.Context, hdr *wire.Header, sess *session) uint32 {
 	if sess != nil {
 		for _, t := range sess.trees {
-			c.closeAllOpens(t)
+			c.closeAllOpens(ctx, t)
 		}
 		delete(c.sessions, hdr.SessionId)
 	}
@@ -249,9 +249,9 @@ func parseShareName(unc string) string {
 	return s
 }
 
-func (c *conn) handleTreeDisconnect(hdr *wire.Header, sess *session, tr *tree) uint32 {
+func (c *conn) handleTreeDisconnect(ctx context.Context, hdr *wire.Header, sess *session, tr *tree) uint32 {
 	if tr != nil {
-		c.closeAllOpens(tr)
+		c.closeAllOpens(ctx, tr)
 		delete(sess.trees, hdr.TreeId)
 	}
 	var r wire.TreeDisconnectResponse
@@ -259,8 +259,7 @@ func (c *conn) handleTreeDisconnect(hdr *wire.Header, sess *session, tr *tree) u
 	return wire.StatusSuccess
 }
 
-func (c *conn) closeAllOpens(tr *tree) {
-	ctx := context.Background()
+func (c *conn) closeAllOpens(ctx context.Context, tr *tree) {
 	for _, oh := range tr.opens {
 		_ = oh.h.Close(ctx)
 	}
