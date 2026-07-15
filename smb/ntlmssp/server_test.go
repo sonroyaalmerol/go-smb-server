@@ -64,7 +64,7 @@ func marshalAuthenticate(domain, user string, serverChallenge [8]byte, ntResp []
 	payload = append(payload, ntResp...)
 
 	out := make([]byte, fixed+len(payload))
-	copy(out[0:8], Signature[:])
+	copy(out[0:8], ntlmSignature[:])
 	binary.LittleEndian.PutUint32(out[8:12], MsgAuthenticate)
 	putField(out[20:28], len(ntResp), fixed+len(domainU)+len(userU)+len(wksU))
 	putField(out[28:36], len(domainU), fixed)
@@ -98,7 +98,7 @@ func TestNTLMv2Handshake(t *testing.T) {
 	key := NTOWFv2(password, user, domain)
 	lookup := &staticLookup{keys: map[string][]byte{domain + "\\" + user: key}}
 
-	srv := NewServer(lookup, "SRV")().(*ServerAuthenticator)
+	srv := NewServer(lookup, "SRV")().(*serverAuthenticator)
 
 	if _, err := rand.Read(srv.challenge[:]); err != nil {
 		t.Fatal(err)
@@ -122,7 +122,7 @@ func TestNTLMv2WrongPassword(t *testing.T) {
 	key := NTOWFv2("right-password", "bob", "TEST")
 	lookup := &staticLookup{keys: map[string][]byte{"TEST\\bob": key}}
 
-	srv := NewServer(lookup, "SRV")().(*ServerAuthenticator)
+	srv := NewServer(lookup, "SRV")().(*serverAuthenticator)
 	if _, err := rand.Read(srv.challenge[:]); err != nil {
 		t.Fatal(err)
 	}

@@ -24,23 +24,23 @@ func extractPayload(msg []byte, fields []byte) ([]byte, error) {
 
 const negotiateFixedLen = 32
 
-type NegotiateMessage struct {
+type negotiateMessage struct {
 	Flags       uint32
 	DomainName  string
 	Workstation string
 }
 
-func ParseNegotiateMessage(b []byte) (*NegotiateMessage, error) {
+func parseNegotiateMessage(b []byte) (*negotiateMessage, error) {
 	if len(b) < negotiateFixedLen {
 		return nil, fmt.Errorf("%w: negotiate needs %d bytes, got %d", ErrInvalidNTLMMessage, negotiateFixedLen, len(b))
 	}
-	if [8]byte(b[0:8]) != Signature {
+	if [8]byte(b[0:8]) != ntlmSignature {
 		return nil, fmt.Errorf("%w: bad signature", ErrInvalidNTLMMessage)
 	}
 	if mt := binary.LittleEndian.Uint32(b[8:12]); mt != MsgNegotiate {
 		return nil, fmt.Errorf("%w: not a NEGOTIATE message (type %d)", ErrInvalidNTLMMessage, mt)
 	}
-	m := &NegotiateMessage{Flags: binary.LittleEndian.Uint32(b[12:16])}
+	m := &negotiateMessage{Flags: binary.LittleEndian.Uint32(b[12:16])}
 	if d, err := extractPayload(b, b[16:24]); err == nil && d != nil {
 		m.DomainName = string(d)
 	}
@@ -52,21 +52,21 @@ func ParseNegotiateMessage(b []byte) (*NegotiateMessage, error) {
 
 const challengeFixedLen = 56
 
-type ChallengeMessage struct {
+type challengeMessage struct {
 	Flags           uint32
 	ServerChallenge [8]byte
 	TargetName      string
 	TargetInfo      []byte
 }
 
-func (c *ChallengeMessage) Marshal() ([]byte, error) {
+func (c *challengeMessage) Marshal() ([]byte, error) {
 	target := []byte(toUTF16LE(c.TargetName))
 	payload := append([]byte(nil), target...)
 	payload = append(payload, c.TargetInfo...)
 
 	total := challengeFixedLen + len(payload)
 	out := make([]byte, total)
-	copy(out[0:8], Signature[:])
+	copy(out[0:8], ntlmSignature[:])
 	binary.LittleEndian.PutUint32(out[8:12], MsgChallenge)
 	binary.LittleEndian.PutUint16(out[12:14], uint16(len(target)))
 	binary.LittleEndian.PutUint16(out[14:16], uint16(len(target)))
@@ -82,7 +82,7 @@ func (c *ChallengeMessage) Marshal() ([]byte, error) {
 
 const authenticateFixedLen = 88
 
-type AuthenticateMessage struct {
+type authenticateMessage struct {
 	Flags               uint32
 	DomainName          []byte
 	UserName            []byte
@@ -93,17 +93,17 @@ type AuthenticateMessage struct {
 	MIC                 [16]byte
 }
 
-func ParseAuthenticateMessage(b []byte) (*AuthenticateMessage, error) {
+func parseAuthenticateMessage(b []byte) (*authenticateMessage, error) {
 	if len(b) < authenticateFixedLen {
 		return nil, fmt.Errorf("%w: authenticate needs %d bytes, got %d", ErrInvalidNTLMMessage, authenticateFixedLen, len(b))
 	}
-	if [8]byte(b[0:8]) != Signature {
+	if [8]byte(b[0:8]) != ntlmSignature {
 		return nil, fmt.Errorf("%w: bad signature", ErrInvalidNTLMMessage)
 	}
 	if mt := binary.LittleEndian.Uint32(b[8:12]); mt != MsgAuthenticate {
 		return nil, fmt.Errorf("%w: not an AUTHENTICATE message (type %d)", ErrInvalidNTLMMessage, mt)
 	}
-	m := &AuthenticateMessage{Flags: binary.LittleEndian.Uint32(b[60:64])}
+	m := &authenticateMessage{Flags: binary.LittleEndian.Uint32(b[60:64])}
 	var err error
 	if m.LmChallengeResponse, err = extractPayload(b, b[12:20]); err != nil {
 		return nil, err
@@ -127,7 +127,7 @@ func ParseAuthenticateMessage(b []byte) (*AuthenticateMessage, error) {
 	return m, nil
 }
 
-func UTF16String(b []byte) string {
+func utf16String(b []byte) string {
 	return decodeUTF16LE(b)
 }
 

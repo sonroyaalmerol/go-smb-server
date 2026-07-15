@@ -10,7 +10,7 @@ import (
 	"golang.org/x/crypto/md4"
 )
 
-var Signature = [8]byte{'N', 'T', 'L', 'M', 'S', 'S', 'P', 0x00}
+var ntlmSignature = [8]byte{'N', 'T', 'L', 'M', 'S', 'S', 'P', 0x00}
 
 const (
 	MsgNegotiate    uint32 = 0x00000001
@@ -63,7 +63,7 @@ func NTOWFv2(password, user, domain string) []byte {
 	return mac.Sum(nil)
 }
 
-func ComputeNTProofStr(responseKeyNT, serverChallenge, ntChallengeResponse []byte) []byte {
+func computeNTProofStr(responseKeyNT, serverChallenge, ntChallengeResponse []byte) []byte {
 	temp := ntChallengeResponse[16:]
 	mac := hmac.New(md5.New, responseKeyNT)
 	mac.Write(serverChallenge)
@@ -71,7 +71,7 @@ func ComputeNTProofStr(responseKeyNT, serverChallenge, ntChallengeResponse []byt
 	return mac.Sum(nil)
 }
 
-func SessionBaseKey(responseKeyNT, ntProofStr []byte) []byte {
+func sessionBaseKey(responseKeyNT, ntProofStr []byte) []byte {
 	mac := hmac.New(md5.New, responseKeyNT)
 	mac.Write(ntProofStr)
 	return mac.Sum(nil)

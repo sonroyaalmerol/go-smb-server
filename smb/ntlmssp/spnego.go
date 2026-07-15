@@ -10,7 +10,7 @@ import (
 
 var ntlmOID = asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 311, 2, 2, 10}
 
-func UnwrapSPNEGOToken(token []byte) ([]byte, error) {
+func unwrapSPNEGOToken(token []byte) ([]byte, error) {
 	if isNTLMSSP(token) {
 		return token, nil
 	}
@@ -91,7 +91,7 @@ func findContextTag2(raw []byte) ([]byte, bool) {
 	return nil, false
 }
 
-func isNTLMSSP(b []byte) bool { return len(b) >= 8 && [8]byte(b[0:8]) == Signature }
+func isNTLMSSP(b []byte) bool { return len(b) >= 8 && [8]byte(b[0:8]) == ntlmSignature }
 
 func parseContextTag(b []byte) ([]byte, error) {
 	if len(b) < 2 {
@@ -117,11 +117,11 @@ func parseContextTag(b []byte) ([]byte, error) {
 	return b[idx : idx+length], nil
 }
 
-func WrapSPNEGOChallenge(challenge []byte) ([]byte, error) {
+func wrapSPNEGOChallenge(challenge []byte) ([]byte, error) {
 	return wrapNegTokenResp(1, challenge)
 }
 
-func WrapSPNEGOAccept() ([]byte, error) {
+func wrapSPNEGOAccept() ([]byte, error) {
 	return wrapNegTokenResp(0, nil)
 }
 

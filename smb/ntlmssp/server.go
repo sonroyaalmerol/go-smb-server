@@ -15,7 +15,7 @@ type CredentialLookup interface {
 
 var ErrUnknownUser = errors.New("ntlmssp: unknown user")
 
-type ServerAuthenticator struct {
+type serverAuthenticator struct {
 	lookup CredentialLookup
 
 	stage      int
@@ -29,12 +29,12 @@ type ServerAuthenticator struct {
 
 func NewServer(lookup CredentialLookup, serverName string) auth.Factory {
 	return func() auth.Authenticator {
-		return &ServerAuthenticator{lookup: lookup, targetName: serverName}
+		return &serverAuthenticator{lookup: lookup, targetName: serverName}
 	}
 }
 
-func (s *ServerAuthenticator) Accept(ctx context.Context, token []byte) (auth.AcceptResult, error) {
-	msg, err := UnwrapSPNEGOToken(token)
+func (s *serverAuthenticator) Accept(ctx context.Context, token []byte) (auth.AcceptResult, error) {
+	msg, err := unwrapSPNEGOToken(token)
 	if err != nil {
 		return auth.AcceptResult{}, fmt.Errorf("ntlmssp: unwrap spnego: %w", err)
 	}
@@ -49,8 +49,8 @@ func (s *ServerAuthenticator) Accept(ctx context.Context, token []byte) (auth.Ac
 	}
 }
 
-func (s *ServerAuthenticator) handleNegotiate(msg []byte) (auth.AcceptResult, error) {
-	if _, err := ParseNegotiateMessage(msg); err != nil {
+func (s *serverAuthenticator) handleNegotiate(msg []byte) (auth.AcceptResult, error) {
+	if _, err := parseNegotiateMessage(msg); err != nil {
 		return auth.AcceptResult{}, fmt.Errorf("ntlmssp: parse negotiate: %w", err)
 	}
 	if _, err := rand.Read(s.challenge[:]); err != nil {
@@ -59,7 +59,7 @@ func (s *ServerAuthenticator) handleNegotiate(msg []byte) (auth.AcceptResult, er
 	s.negotiate = append([]byte(nil), msg...)
 	s.stage = 1
 
-	resp := &ChallengeMessage{
+	resp := &challengeMessage{
 		Flags:           serverChallengeFlags,
 		ServerChallenge: s.challenge,
 		TargetName:      s.targetName,
@@ -69,20 +69,20 @@ func (s *ServerAuthenticator) handleNegotiate(msg []byte) (auth.AcceptResult, er
 	if err != nil {
 		return auth.AcceptResult{}, err
 	}
-	out, err := WrapSPNEGOChallenge(body)
+	out, err := wrapSPNEGOChallenge(body)
 	if err != nil {
 		return auth.AcceptResult{}, err
 	}
 	return auth.AcceptResult{OutputToken: out}, nil
 }
 
-func (s *ServerAuthenticator) handleAuthenticate(ctx context.Context, msg []byte) (auth.AcceptResult, error) {
-	am, err := ParseAuthenticateMessage(msg)
+func (s *serverAuthenticator) handleAuthenticate(ctx context.Context, msg []byte) (auth.AcceptResult, error) {
+	am, err := parseAuthenticateMessage(msg)
 	if err != nil {
 		return auth.AcceptResult{}, fmt.Errorf("ntlmssp: parse authenticate: %w", err)
 	}
-	s.domain = UTF16String(am.DomainName)
-	s.user = UTF16String(am.UserName)
+	s.domain = utf16String(am.DomainName)
+	s.user = utf16String(am.UserName)
 
 	if len(am.NtChallengeResponse) < 16 {
 		return auth.AcceptResult{}, auth.ErrLogonFailed
@@ -93,12 +93,12 @@ func (s *ServerAuthenticator) handleAuthenticate(ctx context.Context, msg []byte
 		return auth.AcceptResult{}, auth.ErrLogonFailed
 	}
 
-	proof := ComputeNTProofStr(key, s.challenge[:], am.NtChallengeResponse)
+	proof := computeNTProofStr(key, s.challenge[:], am.NtChallengeResponse)
 	if !ctEqual(proof, am.NtChallengeResponse[:16]) {
 		return auth.AcceptResult{}, auth.ErrLogonFailed
 	}
 
-	sessionKey := SessionBaseKey(key, proof)
+	sessionKey := sessionBaseKey(key, proof)
 	if am.Flags&FlagNegotiateKeyExch != 0 && len(am.EncryptedSessionKey) == 16 {
 		sessionKey = rc4Decrypt(sessionKey, am.EncryptedSessionKey)
 	}
@@ -108,7 +108,7 @@ func (s *ServerAuthenticator) handleAuthenticate(ctx context.Context, msg []byte
 		Username: s.user,
 		Domain:   s.domain,
 	}
-	acceptToken, err := WrapSPNEGOAccept()
+	acceptToken, err := wrapSPNEGOAccept()
 	if err != nil {
 		return auth.AcceptResult{}, fmt.Errorf("ntlmssp: wrap accept: %w", err)
 	}

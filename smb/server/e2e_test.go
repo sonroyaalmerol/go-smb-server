@@ -65,10 +65,9 @@ func newTestServer(backend vfs.Backend) *Server {
 	}
 }
 
-func readReply(t *testing.T, r io.Reader) (wire.Header, []byte) {
+func readReply(t *testing.T, fc *transport.FramedConn) (wire.Header, []byte) {
 	t.Helper()
-	var buf []byte
-	msg, err := transport.ReadFrame(r, &buf)
+	msg, err := fc.ReadMessage()
 	if err != nil {
 		t.Fatalf("read frame: %v", err)
 	}
@@ -106,7 +105,7 @@ func TestEndToEnd_Negotiate(t *testing.T) {
 	msg = append(msg, body...)
 	mustWrite(t, fc, msg)
 
-	rh, _ := readReply(t, fc.Underlying())
+	rh, _ := readReply(t, fc)
 	if rh.Command != wire.CmdNegotiate {
 		t.Fatalf("command = %x, want negotiate", rh.Command)
 	}
@@ -135,20 +134,20 @@ func TestEndToEnd_FullConversation(t *testing.T) {
 	msg := hdr.Append(nil)
 	msg = append(msg, negBody...)
 	mustWrite(t, fc, msg)
-	rh, _ := readReply(t, fc.Underlying())
+	rh, _ := readReply(t, fc)
 	if rh.Status != wire.StatusSuccess {
 		t.Fatalf("negotiate: %x", rh.Status)
 	}
 
 	mustWrite(t, fc, buildSessionSetup([]byte{0x60, 0x04, 0xbe, 0xef}))
-	rh, _ = readReply(t, fc.Underlying())
+	rh, _ = readReply(t, fc)
 	if rh.Status != wire.StatusSuccess {
 		t.Fatalf("session_setup: %x", rh.Status)
 	}
 	sessID := rh.SessionId
 
 	mustWrite(t, fc, buildTreeConnect(sessID, `\\server\share`))
-	rh, resp := readReply(t, fc.Underlying())
+	rh, resp := readReply(t, fc)
 	if rh.Status != wire.StatusSuccess {
 		t.Fatalf("tree_connect: %x", rh.Status)
 	}
@@ -158,7 +157,7 @@ func TestEndToEnd_FullConversation(t *testing.T) {
 	treeID := rh.TreeId
 
 	mustWrite(t, fc, buildCreate(sessID, treeID, "test.txt", wire.FileOpenIf))
-	rh, resp = readReply(t, fc.Underlying())
+	rh, resp = readReply(t, fc)
 	if rh.Status != wire.StatusSuccess {
 		t.Fatalf("create: %x", rh.Status)
 	}
@@ -166,13 +165,13 @@ func TestEndToEnd_FullConversation(t *testing.T) {
 	copy(fid[:], resp[64+64:64+80])
 
 	mustWrite(t, fc, buildWrite(sessID, treeID, fid, 0, []byte("hello")))
-	rh, _ = readReply(t, fc.Underlying())
+	rh, _ = readReply(t, fc)
 	if rh.Status != wire.StatusSuccess {
 		t.Fatalf("write: %x", rh.Status)
 	}
 
 	mustWrite(t, fc, buildRead(sessID, treeID, fid, 0, 5))
-	rh, resp = readReply(t, fc.Underlying())
+	rh, resp = readReply(t, fc)
 	if rh.Status != wire.StatusSuccess {
 		t.Fatalf("read: %x", rh.Status)
 	}
@@ -181,7 +180,7 @@ func TestEndToEnd_FullConversation(t *testing.T) {
 	}
 
 	mustWrite(t, fc, buildClose(sessID, treeID, fid))
-	rh, _ = readReply(t, fc.Underlying())
+	rh, _ = readReply(t, fc)
 	if rh.Status != wire.StatusSuccess {
 		t.Fatalf("close: %x", rh.Status)
 	}
@@ -324,7 +323,7 @@ func TestEndToEnd_QueryDirectory(t *testing.T) {
 
 	createMsg := buildCreate(sessID, treeID, "", wire.FileOpen)
 	mustWrite(t, fc, createMsg)
-	rh, resp := readReply(t, fc.Underlying())
+	rh, resp := readReply(t, fc)
 	if rh.Status != wire.StatusSuccess {
 		t.Fatalf("create dir: %x", rh.Status)
 	}
@@ -332,7 +331,7 @@ func TestEndToEnd_QueryDirectory(t *testing.T) {
 	copy(dirFid[:], resp[64+64:64+80])
 
 	mustWrite(t, fc, buildQueryDirectory(sessID, treeID, dirFid, "*"))
-	rh, resp = readReply(t, fc.Underlying())
+	rh, resp = readReply(t, fc)
 	if rh.Status != wire.StatusSuccess {
 		t.Fatalf("query_directory: %x", rh.Status)
 	}
@@ -355,7 +354,7 @@ func negotiate(t *testing.T, fc *transport.FramedConn) {
 	msg := hdr.Append(nil)
 	msg = append(msg, negBody...)
 	mustWrite(t, fc, msg)
-	rh, _ := readReply(t, fc.Underlying())
+	rh, _ := readReply(t, fc)
 	if rh.Status != wire.StatusSuccess {
 		t.Fatalf("negotiate: %x", rh.Status)
 	}
@@ -364,7 +363,7 @@ func negotiate(t *testing.T, fc *transport.FramedConn) {
 func sessionSetup(t *testing.T, fc *transport.FramedConn) uint64 {
 	t.Helper()
 	mustWrite(t, fc, buildSessionSetup([]byte{0x60, 0x04, 0xbe, 0xef}))
-	rh, _ := readReply(t, fc.Underlying())
+	rh, _ := readReply(t, fc)
 	if rh.Status != wire.StatusSuccess {
 		t.Fatalf("session_setup: %x", rh.Status)
 	}
@@ -374,7 +373,7 @@ func sessionSetup(t *testing.T, fc *transport.FramedConn) uint64 {
 func treeConnect(t *testing.T, fc *transport.FramedConn, sessID uint64) uint32 {
 	t.Helper()
 	mustWrite(t, fc, buildTreeConnect(sessID, `\\server\share`))
-	rh, _ := readReply(t, fc.Underlying())
+	rh, _ := readReply(t, fc)
 	if rh.Status != wire.StatusSuccess {
 		t.Fatalf("tree_connect: %x", rh.Status)
 	}
@@ -409,7 +408,7 @@ func TestEndToEnd_QueryInfoAndDeleteOnClose(t *testing.T) {
 
 	// CREATE a file
 	mustWrite(t, fc, buildCreate(sessID, treeID, "qinfo.txt", wire.FileOpenIf))
-	rh, resp := readReply(t, fc.Underlying())
+	rh, resp := readReply(t, fc)
 	if rh.Status != wire.StatusSuccess {
 		t.Fatalf("create: %x", rh.Status)
 	}
@@ -418,7 +417,7 @@ func TestEndToEnd_QueryInfoAndDeleteOnClose(t *testing.T) {
 
 	// QUERY_INFO FileBasicInformation
 	mustWrite(t, fc, buildQueryInfo(sessID, treeID, fid, wire.FileBasicInfoClass))
-	rh, qResp := readReply(t, fc.Underlying())
+	rh, qResp := readReply(t, fc)
 	if rh.Status != wire.StatusSuccess {
 		t.Fatalf("query_info: %x", rh.Status)
 	}
@@ -429,21 +428,21 @@ func TestEndToEnd_QueryInfoAndDeleteOnClose(t *testing.T) {
 
 	// SET_INFO FileDispositionInformation = 1 (delete on close)
 	mustWrite(t, fc, buildSetInfo(sessID, treeID, fid, wire.FileDispositionInformation, []byte{1}))
-	rh, _ = readReply(t, fc.Underlying())
+	rh, _ = readReply(t, fc)
 	if rh.Status != wire.StatusSuccess {
 		t.Fatalf("set_info: %x", rh.Status)
 	}
 
 	// CLOSE should delete the file
 	mustWrite(t, fc, buildClose(sessID, treeID, fid))
-	rh, _ = readReply(t, fc.Underlying())
+	rh, _ = readReply(t, fc)
 	if rh.Status != wire.StatusSuccess {
 		t.Fatalf("close: %x", rh.Status)
 	}
 
 	// Re-open should now fail (file gone).
 	mustWrite(t, fc, buildCreate(sessID, treeID, "qinfo.txt", wire.FileOpen))
-	rh, _ = readReply(t, fc.Underlying())
+	rh, _ = readReply(t, fc)
 	if rh.Status == wire.StatusSuccess {
 		t.Fatal("expected file to be deleted")
 	}
@@ -498,7 +497,7 @@ func TestEndToEnd_LockConflict(t *testing.T) {
 
 	// Open the same file twice.
 	mustWrite(t, fc, buildCreate(sessID, treeID, "locktest.txt", wire.FileOpenIf))
-	rh, resp := readReply(t, fc.Underlying())
+	rh, resp := readReply(t, fc)
 	if rh.Status != wire.StatusSuccess {
 		t.Fatalf("create1: %x", rh.Status)
 	}
@@ -506,7 +505,7 @@ func TestEndToEnd_LockConflict(t *testing.T) {
 	copy(fid1[:], resp[64+64:64+80])
 
 	mustWrite(t, fc, buildCreate(sessID, treeID, "locktest.txt", wire.FileOpenIf))
-	rh, resp = readReply(t, fc.Underlying())
+	rh, resp = readReply(t, fc)
 	if rh.Status != wire.StatusSuccess {
 		t.Fatalf("create2: %x", rh.Status)
 	}
@@ -515,26 +514,26 @@ func TestEndToEnd_LockConflict(t *testing.T) {
 
 	// Take an exclusive lock on [0,100) from fid1.
 	mustWrite(t, fc, buildLock(sessID, treeID, fid1, 0, 100, wire.LockFlagExclusiveLock))
-	rh, _ = readReply(t, fc.Underlying())
+	rh, _ = readReply(t, fc)
 	if rh.Status != wire.StatusSuccess {
 		t.Fatalf("lock1: %x", rh.Status)
 	}
 
 	// An exclusive lock on the same range from fid2 must conflict.
 	mustWrite(t, fc, buildLock(sessID, treeID, fid2, 0, 100, wire.LockFlagExclusiveLock|wire.LockFlagFailImmediately))
-	rh, _ = readReply(t, fc.Underlying())
+	rh, _ = readReply(t, fc)
 	if rh.Status != wire.StatusLockConflict {
 		t.Fatalf("expected lock conflict, got %x", rh.Status)
 	}
 
 	// Unlock from fid1, then fid2's lock should succeed.
 	mustWrite(t, fc, buildLock(sessID, treeID, fid1, 0, 100, wire.LockFlagUnlock))
-	rh, _ = readReply(t, fc.Underlying())
+	rh, _ = readReply(t, fc)
 	if rh.Status != wire.StatusSuccess {
 		t.Fatalf("unlock: %x", rh.Status)
 	}
 	mustWrite(t, fc, buildLock(sessID, treeID, fid2, 0, 100, wire.LockFlagExclusiveLock|wire.LockFlagFailImmediately))
-	rh, _ = readReply(t, fc.Underlying())
+	rh, _ = readReply(t, fc)
 	if rh.Status != wire.StatusSuccess {
 		t.Fatalf("lock2 after unlock: %x", rh.Status)
 	}
@@ -578,7 +577,7 @@ func TestEndToEnd_ChangeNotify(t *testing.T) {
 
 	// Open the directory root.
 	mustWrite(t, fc, buildCreate(sessID, treeID, "", wire.FileOpen))
-	rh, resp := readReply(t, fc.Underlying())
+	rh, resp := readReply(t, fc)
 	if rh.Status != wire.StatusSuccess {
 		t.Fatalf("create dir: %x", rh.Status)
 	}
@@ -588,7 +587,7 @@ func TestEndToEnd_ChangeNotify(t *testing.T) {
 	// Subscribe to CHANGE_NOTIFY (async).
 	mustWrite(t, fc, buildChangeNotify(sessID, treeID, dirFid, FileNotifyChangeFileName))
 	// Expect the interim STATUS_PENDING response.
-	rh, _ = readReply(t, fc.Underlying())
+	rh, _ = readReply(t, fc)
 	if rh.Status != wire.StatusPending {
 		t.Fatalf("change_notify interim: %x, want pending", rh.Status)
 	}
@@ -602,7 +601,7 @@ func TestEndToEnd_ChangeNotify(t *testing.T) {
 	}()
 
 	// Expect a final async response with the added-file notification.
-	rh, cnResp := readReply(t, fc.Underlying())
+	rh, cnResp := readReply(t, fc)
 	if rh.Status != wire.StatusSuccess {
 		t.Fatalf("change_notify final: %x", rh.Status)
 	}

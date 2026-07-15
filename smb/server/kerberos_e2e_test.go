@@ -125,13 +125,13 @@ func TestKerberosE2E_SessionSetupAndSigning(t *testing.T) {
 	hdr.MessageId = 0
 	hdr.Credit = 1
 	mustWrite(t, fc, append(hdr.Append(nil), negBody...))
-	rh, _ := readReply(t, fc.Underlying())
+	rh, _ := readReply(t, fc)
 	if rh.Status != wire.StatusSuccess {
 		t.Fatalf("negotiate: %x", rh.Status)
 	}
 
 	mustWrite(t, fc, buildSessionSetup(token))
-	rh, _ = readReply(t, fc.Underlying())
+	rh, _ = readReply(t, fc)
 	if rh.Status != wire.StatusSuccess {
 		t.Fatalf("session_setup: %x", rh.Status)
 	}
@@ -142,14 +142,14 @@ func TestKerberosE2E_SessionSetupAndSigning(t *testing.T) {
 
 	correctSigningKey := signing.DeriveSigningKey(sessionKey)
 	mustWrite(t, fc, signedTreeConnect(sessID, 2, `\\server\share`, correctSigningKey))
-	rh, _ = readReply(t, fc.Underlying())
+	rh, _ = readReply(t, fc)
 	if rh.Status != wire.StatusSuccess {
 		t.Fatalf("signed tree_connect with correct key: %x", rh.Status)
 	}
 
 	wrongKey := signing.DeriveSigningKey(make([]byte, 32))
 	mustWrite(t, fc, signedTreeConnect(sessID, 8, `\\server\share`, wrongKey))
-	rh, _ = readReply(t, fc.Underlying())
+	rh, _ = readReply(t, fc)
 	if rh.Status == wire.StatusSuccess {
 		t.Fatal("tree_connect signed with wrong key was accepted")
 	}
@@ -171,13 +171,13 @@ func TestKerberosE2E_RejectsBadToken(t *testing.T) {
 	hdr.MessageId = 0
 	hdr.Credit = 1
 	mustWrite(t, fc, append(hdr.Append(nil), negBody...))
-	rh, _ := readReply(t, fc.Underlying())
+	rh, _ := readReply(t, fc)
 	if rh.Status != wire.StatusSuccess {
 		t.Fatalf("negotiate: %x", rh.Status)
 	}
 
 	mustWrite(t, fc, buildSessionSetup([]byte{0xDE, 0xAD, 0xBE, 0xEF}))
-	rh, _ = readReply(t, fc.Underlying())
+	rh, _ = readReply(t, fc)
 	if rh.Status != wire.StatusLogonFailure {
 		t.Fatalf("session_setup with garbage: status %x, want LOGON_FAILURE", rh.Status)
 	}

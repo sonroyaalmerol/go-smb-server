@@ -26,12 +26,12 @@ type Factory func() Authenticator
 
 var ErrLogonFailed = errors.New("auth: logon failed")
 
-type AlwaysAllowAuthenticator struct{}
-
-func (AlwaysAllowAuthenticator) Accept(_ context.Context, _ []byte) (AcceptResult, error) {
-	return AcceptResult{Identity: &Identity{Username: "guest"}}, nil
+func AlwaysAllowFactory() Factory {
+	return func() Authenticator { return alwaysAllowAuthenticator{} }
 }
 
-func AlwaysAllowFactory() Factory {
-	return func() Authenticator { return AlwaysAllowAuthenticator{} }
+type alwaysAllowAuthenticator struct{}
+
+func (alwaysAllowAuthenticator) Accept(_ context.Context, _ []byte) (AcceptResult, error) {
+	return AcceptResult{Identity: &Identity{Username: "guest"}}, nil
 }
