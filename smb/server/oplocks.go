@@ -68,7 +68,7 @@ func (c *conn) sendOplockBreak(info *oplockInfo) {
 	copy(msg[72:88], info.fileId[:])
 	select {
 	case c.asyncResp <- msg[:]:
-	default:
+	case <-c.connDone:
 	}
 }
 

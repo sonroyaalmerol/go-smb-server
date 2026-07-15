@@ -51,7 +51,7 @@ func (c *conn) cancelPending(asyncID uint64) *pendingOp {
 func (c *conn) sendFinal(msg []byte) {
 	select {
 	case c.asyncResp <- msg:
-	default:
+	case <-c.connDone:
 	}
 }
 

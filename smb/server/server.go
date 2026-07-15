@@ -200,6 +200,7 @@ type conn struct {
 	pendingByMsg map[uint64]*pendingOp
 	pendingMu    sync.Mutex
 	asyncResp    chan []byte
+	connDone     chan struct{}
 
 	preauthHash []byte
 }
@@ -220,6 +221,7 @@ func (s *Server) serveConn(ctx context.Context, c net.Conn) {
 		pending:       make(map[uint64]*pendingOp),
 		pendingByMsg:  make(map[uint64]*pendingOp),
 		asyncResp:     make(chan []byte, 64),
+		connDone:      make(chan struct{}),
 		preauthHash:   sha.Sum(nil),
 	}
 	defer cn.cleanup()
@@ -436,6 +438,7 @@ func fileIdOffset(cmd uint16) int {
 func (c *conn) getSession(id uint64) *session { return c.sessions[id] }
 
 func (c *conn) cleanup() {
+	close(c.connDone)
 	c.pendingMu.Lock()
 	for _, op := range c.pending {
 		op.cancel()

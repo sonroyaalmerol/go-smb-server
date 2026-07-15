@@ -51,7 +51,6 @@ func (b *PipeBackend) Open(ctx context.Context, opts OpenOptions) (Handle, error
 			ChangeTime:   time.Now(),
 		},
 	}
-	h.cond = sync.NewCond(&h.mu)
 	return h, nil
 }
 
@@ -61,7 +60,6 @@ type pipeHandle struct {
 	info    FileInfo
 
 	mu       sync.Mutex
-	cond     *sync.Cond
 	writeBuf []byte
 	hasWrite bool
 	readBuf  []byte
@@ -71,36 +69,27 @@ type pipeHandle struct {
 
 func (h *pipeHandle) Read(ctx context.Context, offset int64, p []byte) (int, error) {
 	h.mu.Lock()
-	for !h.hasWrite && h.readPos >= len(h.readBuf) && !h.closed {
-		h.cond.Wait()
-	}
 	if h.closed {
 		h.mu.Unlock()
 		return 0, io.EOF
 	}
-
-	var data []byte
-	var input []byte
-	if h.readPos >= len(h.readBuf) && h.hasWrite {
-		input = h.writeBuf
+	if h.readPos >= len(h.readBuf) {
+		if !h.hasWrite {
+			h.mu.Unlock()
+			return 0, nil
+		}
+		input := h.writeBuf
 		h.readBuf = nil
 		h.readPos = 0
 		h.hasWrite = false
 		h.writeBuf = nil
-	} else if h.readPos < len(h.readBuf) {
-		data = h.readBuf
+		h.mu.Unlock()
+		data := h.handler(input)
+		h.mu.Lock()
+		h.readBuf = data
+		h.readPos = 0
 	}
-	h.mu.Unlock()
-
-	if input != nil {
-		data = h.handler(input)
-	}
-
-	if len(data) == 0 {
-		return 0, io.EOF
-	}
-	n := copy(p, data[h.readPos:])
-	h.mu.Lock()
+	n := copy(p, h.readBuf[h.readPos:])
 	h.readPos += n
 	h.mu.Unlock()
 	return n, nil
@@ -111,7 +100,6 @@ func (h *pipeHandle) Write(ctx context.Context, offset int64, p []byte) (int, er
 	h.writeBuf = append(h.writeBuf[:0], p...)
 	h.hasWrite = true
 	h.mu.Unlock()
-	h.cond.Broadcast()
 	return len(p), nil
 }
 
@@ -122,7 +110,6 @@ func (h *pipeHandle) Close(ctx context.Context) error {
 	h.writeBuf = nil
 	h.readBuf = nil
 	h.mu.Unlock()
-	h.cond.Broadcast()
 	return nil
 }
 
@@ -156,11 +143,6 @@ func putLE32(b []byte, v uint32) {
 
 func putLE16(b []byte, v uint16) {
 	b[0], b[1] = byte(v), byte(v>>8)
-}
-
-var srvsvcUUID = [16]byte{
-	0xc8, 0x4f, 0x32, 0x4b, 0x70, 0x16, 0xd3, 0x01,
-	0x12, 0x78, 0x5a, 0x47, 0xbf, 0x6e, 0xe1, 0x88,
 }
 
 const (
