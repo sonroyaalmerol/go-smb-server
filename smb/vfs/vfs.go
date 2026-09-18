@@ -9,6 +9,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -127,8 +128,11 @@ func NewLocalBackend(root string) (*LocalBackend, error) {
 	return &LocalBackend{Root: abs}, nil
 }
 
+// fullPath maps a share path to the local filesystem. SMB separates path
+// components with backslashes, which are ordinary name characters outside
+// Windows, so they are converted first.
 func (b *LocalBackend) fullPath(p string) string {
-	clean := path.Clean("/" + p)
+	clean := path.Clean("/" + strings.ReplaceAll(p, `\`, "/"))
 	if clean == "/" {
 		clean = ""
 	}
@@ -191,11 +195,14 @@ func (b *LocalBackend) Open(_ context.Context, opts OpenOptions) (Handle, error)
 
 	flags := getFlags(opts.Disposition, opts.Append)
 	if opts.CreateDir {
-		if err := os.Mkdir(full, 0o755); err != nil && !os.IsExist(err) {
+		// FILE_CREATE fails on an existing directory; the other dispositions
+		// open it. Either way the directory then exists, so it is opened
+		// without O_CREATE|O_EXCL, which would fail on the one just made.
+		err := os.Mkdir(full, 0o755)
+		if err != nil && (!os.IsExist(err) || opts.Disposition == DispositionCreate) {
 			return nil, err
 		}
-		flags &^= os.O_RDWR | os.O_WRONLY
-		flags |= os.O_RDONLY
+		flags = os.O_RDONLY
 	} else if fi, statErr := os.Stat(full); statErr == nil && fi.IsDir() {
 		flags &^= os.O_RDWR | os.O_WRONLY
 		flags |= os.O_RDONLY
@@ -204,7 +211,7 @@ func (b *LocalBackend) Open(_ context.Context, opts OpenOptions) (Handle, error)
 	if err != nil {
 		return nil, err
 	}
-	return &localHandle{f: f, path: full, name: filepath.Base(full)}, nil
+	return &localHandle{f: f, path: full, name: filepath.Base(full), backend: b}, nil
 }
 
 func getFlags(disp uint32, appendFile bool) int {
@@ -224,9 +231,10 @@ func getFlags(disp uint32, appendFile bool) int {
 }
 
 type localHandle struct {
-	f    *os.File
-	path string
-	name string
+	f       *os.File
+	path    string
+	name    string
+	backend *LocalBackend
 }
 
 func (h *localHandle) Read(_ context.Context, offset int64, p []byte) (int, error) {
@@ -270,16 +278,32 @@ func (h *localHandle) SetInfo(_ context.Context, req *SetInfoRequest) error {
 			return err
 		}
 	}
-	if req.Attributes != nil && *req.Attributes&0x02 != 0 {
-		if err := os.Chmod(h.path, 0400); err != nil {
+	if req.Attributes != nil {
+		// FILE_ATTRIBUTE_READONLY (0x01) is the only attribute a local file
+		// can carry; HIDDEN (0x02) and the rest leave its mode alone.
+		fi, err := h.f.Stat()
+		if err != nil {
 			return err
+		}
+		mode := fi.Mode().Perm()
+		if *req.Attributes&0x01 != 0 {
+			mode &^= 0o222
+		} else {
+			mode |= 0o200
+		}
+		if mode != fi.Mode().Perm() {
+			if err := os.Chmod(h.path, mode); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
 }
 
 func (h *localHandle) Rename(_ context.Context, newPath string, replaceIfExists bool) error {
-	newFull := filepath.Join(filepath.Dir(h.path), filepath.Base(filepath.FromSlash(newPath)))
+	// The new name is a path from the share root (MS-FSCC 2.4.37), so a
+	// rename can move the file to another directory.
+	newFull := h.backend.fullPath(newPath)
 	if !replaceIfExists {
 		if _, err := os.Stat(newFull); err == nil {
 			return os.ErrExist
