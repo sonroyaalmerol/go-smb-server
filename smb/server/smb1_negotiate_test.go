@@ -38,7 +38,7 @@ func TestSMB1NegotiateAnsweredWithWildcardDialect(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
-	c := &conn{srv: srv, log: slog.New(slog.DiscardHandler)}
+	c := &request{conn: &conn{srv: srv, log: slog.New(slog.DiscardHandler)}}
 	c.replyWildcardNegotiate()
 
 	if len(c.out) < wire.HeaderSize+6 {

@@ -14,7 +14,7 @@ import (
 	"github.com/sonroyaalmerol/go-smb-server/smb/wire"
 )
 
-func (c *conn) dispatch(ctx context.Context, msg []byte, hdr *wire.Header, lastFileId *[16]byte, related bool) uint32 {
+func (c *request) dispatch(ctx context.Context, msg []byte, hdr *wire.Header, lastFileId *[16]byte, related bool) uint32 {
 	var sess *session
 	var tr *tree
 	if requiresSession(hdr.Command) {
@@ -91,13 +91,13 @@ func requiresTree(cmd uint16) bool {
 	}
 }
 
-func (c *conn) errBody(status uint32) uint32 {
+func (c *request) errBody(status uint32) uint32 {
 	var e wire.ErrorResponse
 	c.out = e.Append(c.out)
 	return status
 }
 
-func (c *conn) handleNegotiate(msg []byte, hdr *wire.Header) uint32 {
+func (c *request) handleNegotiate(msg []byte, hdr *wire.Header) uint32 {
 	var req wire.NegotiateRequest
 	if err := req.Parse(msg[wire.HeaderSize:]); err != nil {
 		return c.errBody(wire.StatusInvalidParameter)
@@ -156,7 +156,7 @@ func pickDialect(offered []uint16, maxDialect uint16) uint16 {
 	return best
 }
 
-func (c *conn) handleSessionSetup(ctx context.Context, msg []byte, hdr *wire.Header) uint32 {
+func (c *request) handleSessionSetup(ctx context.Context, msg []byte, hdr *wire.Header) uint32 {
 	var req wire.SessionSetupRequest
 	if err := req.Parse(msg); err != nil {
 		return c.errBody(wire.StatusInvalidParameter)
@@ -169,7 +169,7 @@ func (c *conn) handleSessionSetup(ctx context.Context, msg []byte, hdr *wire.Hea
 		}
 		c.nextSess++
 		sessID := c.nextSess
-		c.sessions[sessID] = sess
+		c.putSession(sessID, sess)
 		hdr.SessionId = sessID
 	}
 
@@ -202,19 +202,19 @@ func (c *conn) handleSessionSetup(ctx context.Context, msg []byte, hdr *wire.Hea
 	return wire.StatusMoreProcessingRequired
 }
 
-func (c *conn) handleLogoff(ctx context.Context, hdr *wire.Header, sess *session) uint32 {
+func (c *request) handleLogoff(ctx context.Context, hdr *wire.Header, sess *session) uint32 {
 	if sess != nil {
-		for _, t := range sess.trees {
+		for _, t := range sess.allTrees() {
 			c.closeAllOpens(ctx, t)
 		}
-		delete(c.sessions, hdr.SessionId)
+		c.dropSession(hdr.SessionId)
 	}
 	var r wire.LogoffResponse
 	c.out = r.Append(c.out)
 	return wire.StatusSuccess
 }
 
-func (c *conn) handleTreeConnect(msg []byte, hdr *wire.Header, sess *session) uint32 {
+func (c *request) handleTreeConnect(msg []byte, hdr *wire.Header, sess *session) uint32 {
 	var req wire.TreeConnectRequest
 	if err := req.Parse(msg); err != nil {
 		return c.errBody(wire.StatusInvalidParameter)
@@ -227,10 +227,10 @@ func (c *conn) handleTreeConnect(msg []byte, hdr *wire.Header, sess *session) ui
 
 	treeID := sess.nextTreeID
 	sess.nextTreeID++
-	sess.trees[treeID] = &tree{
+	sess.addTree(treeID, &tree{
 		share: sh,
 		opens: make(map[[16]byte]*openHandle),
-	}
+	})
 	hdr.TreeId = treeID
 
 	resp := wire.TreeConnectResponse{
@@ -254,10 +254,10 @@ func parseShareName(unc string) string {
 	return s
 }
 
-func (c *conn) handleTreeDisconnect(ctx context.Context, hdr *wire.Header, sess *session, tr *tree) uint32 {
+func (c *request) handleTreeDisconnect(ctx context.Context, hdr *wire.Header, sess *session, tr *tree) uint32 {
 	if tr != nil {
 		c.closeAllOpens(ctx, tr)
-		delete(sess.trees, hdr.TreeId)
+		sess.dropTree(hdr.TreeId)
 	}
 	var r wire.TreeDisconnectResponse
 	c.out = r.Append(c.out)
@@ -265,14 +265,14 @@ func (c *conn) handleTreeDisconnect(ctx context.Context, hdr *wire.Header, sess 
 }
 
 func (c *conn) closeAllOpens(ctx context.Context, tr *tree) {
-	for _, oh := range tr.opens {
+	for _, oh := range tr.allOpens() {
 		c.srv.lockTable().ReleaseOwner(lockOwner(oh.sessionID, oh.fileId))
 		_ = oh.h.Close(ctx)
 	}
 	tr.opens = make(map[[16]byte]*openHandle)
 }
 
-func (c *conn) handleCreate(ctx context.Context, msg []byte, hdr *wire.Header, tr *tree, lastFileId *[16]byte) uint32 {
+func (c *request) handleCreate(ctx context.Context, msg []byte, hdr *wire.Header, tr *tree, lastFileId *[16]byte) uint32 {
 	var req wire.CreateRequest
 	if err := req.Parse(msg); err != nil {
 		return c.errBody(wire.StatusInvalidParameter)
@@ -296,13 +296,12 @@ func (c *conn) handleCreate(ctx context.Context, msg []byte, hdr *wire.Header, t
 		return c.errBody(osErrToStatus(err))
 	}
 
-	tr.nextID++
-	fid := makeFileID(hdr.SessionId, hdr.TreeId, tr.nextID)
+	fid := makeFileID(hdr.SessionId, hdr.TreeId, tr.nextFileID())
 	c.log.Debug("create", "path", name, "disposition", req.CreateDisposition,
 		"desired_access", req.DesiredAccess, "options", req.CreateOptions)
 	oh := &openHandle{h: h, fileId: fid, sessionID: hdr.SessionId, path: name,
 		deletePending: req.CreateOptions&wire.FileDeleteOnClose != 0}
-	tr.opens[fid] = oh
+	tr.addOpen(oh)
 	*lastFileId = fid
 
 	// CreateAction tells the client what the open actually did (MS-SMB2
@@ -368,12 +367,12 @@ func toFileAttributes(fi vfs.FileInfo) uint32 {
 	return attrs
 }
 
-func (c *conn) handleClose(ctx context.Context, msg []byte, tr *tree) uint32 {
+func (c *request) handleClose(ctx context.Context, msg []byte, tr *tree) uint32 {
 	var req wire.CloseRequest
 	if err := req.Parse(msg); err != nil {
 		return c.errBody(wire.StatusInvalidParameter)
 	}
-	oh, ok := tr.opens[req.FileId]
+	oh, ok := tr.open(req.FileId)
 	if !ok {
 		return c.errBody(wire.StatusInvalidHandle)
 	}
@@ -381,7 +380,7 @@ func (c *conn) handleClose(ctx context.Context, msg []byte, tr *tree) uint32 {
 	if err := oh.h.Close(ctx); err != nil && statErr == nil {
 		return c.errBody(osErrToStatus(err))
 	}
-	delete(tr.opens, req.FileId)
+	tr.removeOpen(req.FileId)
 	if tr.oplocks != nil {
 		tr.oplocks.release(oh.path)
 	}
@@ -408,12 +407,12 @@ func (c *conn) handleClose(ctx context.Context, msg []byte, tr *tree) uint32 {
 	return wire.StatusSuccess
 }
 
-func (c *conn) handleRead(ctx context.Context, msg []byte, tr *tree) uint32 {
+func (c *request) handleRead(ctx context.Context, msg []byte, tr *tree) uint32 {
 	var req wire.ReadRequest
 	if err := req.Parse(msg); err != nil {
 		return c.errBody(wire.StatusInvalidParameter)
 	}
-	oh, ok := tr.opens[req.FileId]
+	oh, ok := tr.open(req.FileId)
 	if !ok {
 		return c.errBody(wire.StatusInvalidHandle)
 	}
@@ -432,12 +431,12 @@ func (c *conn) handleRead(ctx context.Context, msg []byte, tr *tree) uint32 {
 	return wire.StatusSuccess
 }
 
-func (c *conn) handleWrite(ctx context.Context, msg []byte, tr *tree) uint32 {
+func (c *request) handleWrite(ctx context.Context, msg []byte, tr *tree) uint32 {
 	var req wire.WriteRequest
 	if err := req.Parse(msg); err != nil {
 		return c.errBody(wire.StatusInvalidParameter)
 	}
-	oh, ok := tr.opens[req.FileId]
+	oh, ok := tr.open(req.FileId)
 	if !ok {
 		return c.errBody(wire.StatusInvalidHandle)
 	}
@@ -450,12 +449,12 @@ func (c *conn) handleWrite(ctx context.Context, msg []byte, tr *tree) uint32 {
 	return wire.StatusSuccess
 }
 
-func (c *conn) handleQueryDirectory(ctx context.Context, msg []byte, tr *tree) uint32 {
+func (c *request) handleQueryDirectory(ctx context.Context, msg []byte, tr *tree) uint32 {
 	var req wire.QueryDirectoryRequest
 	if err := req.Parse(msg); err != nil {
 		return c.errBody(wire.StatusInvalidParameter)
 	}
-	oh, ok := tr.opens[req.FileId]
+	oh, ok := tr.open(req.FileId)
 	if !ok {
 		return c.errBody(wire.StatusInvalidHandle)
 	}
@@ -562,7 +561,7 @@ func (c *conn) handleQueryDirectory(ctx context.Context, msg []byte, tr *tree) u
 	return wire.StatusSuccess
 }
 
-func (c *conn) handleEcho(hdr *wire.Header) uint32 {
+func (c *request) handleEcho(hdr *wire.Header) uint32 {
 	c.out = append(c.out, 0x04, 0x00, 0x00, 0x00)
 	return wire.StatusSuccess
 }

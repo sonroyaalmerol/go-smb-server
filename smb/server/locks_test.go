@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/sonroyaalmerol/go-smb-server/smb/vfs"
+	"github.com/sonroyaalmerol/go-smb-server/smb/wire"
 )
 
 func TestLockRangeConversion(t *testing.T) {
@@ -96,5 +97,57 @@ func TestMemLockerSharedLocksCoexist(t *testing.T) {
 	}
 	if conflict == nil {
 		t.Fatal("an exclusive lock was granted over shared-locked bytes")
+	}
+}
+
+// Only reads and writes are handled off the read loop: everything else may
+// change session, tree, or handle state, which stays ordered.
+func TestCanHandleConcurrently(t *testing.T) {
+	srv, err := New(WithAddr("127.0.0.1:0"), WithShares(vfs.NewDiskShare("share", newMemBackend())))
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	c := &conn{srv: srv, sessions: map[uint64]*session{7: {authenticated: true}}}
+
+	message := func(command uint16, sessionID uint64, next uint32, flags uint32) []byte {
+		hdr := wire.NewHeader(command)
+		hdr.SessionId = sessionID
+		hdr.NextCommand = next
+		hdr.Flags = flags
+		return hdr.Append(nil)
+	}
+
+	tests := []struct {
+		name string
+		msg  []byte
+		want bool
+	}{
+		{name: "a read on an authenticated session", msg: message(wire.CmdRead, 7, 0, 0), want: true},
+		{name: "a write on an authenticated session", msg: message(wire.CmdWrite, 7, 0, 0), want: true},
+		{name: "a create", msg: message(wire.CmdCreate, 7, 0, 0)},
+		{name: "a close", msg: message(wire.CmdClose, 7, 0, 0)},
+		{name: "a compound read", msg: message(wire.CmdRead, 7, 120, 0)},
+		{name: "a related read", msg: message(wire.CmdRead, 7, 0, wire.FlagRelatedOps)},
+		{name: "a read on an unknown session", msg: message(wire.CmdRead, 99, 0, 0)},
+		{name: "a short message", msg: []byte{0xFE, 'S', 'M', 'B'}},
+		{name: "an SMB1 negotiate", msg: append([]byte{0xFF, 'S', 'M', 'B', 0x72}, make([]byte, 80)...)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := c.canHandleConcurrently(tt.msg); got != tt.want {
+				t.Fatalf("canHandleConcurrently() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+
+	// A server configured to handle one request at a time never qualifies.
+	serial, err := New(WithAddr("127.0.0.1:0"), WithShares(vfs.NewDiskShare("share", newMemBackend())),
+		WithMaxConcurrentRequests(1))
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	c.srv = serial
+	if c.canHandleConcurrently(message(wire.CmdRead, 7, 0, 0)) {
+		t.Fatal("a read qualified although the server handles one request at a time")
 	}
 }

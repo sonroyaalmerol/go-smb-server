@@ -7,12 +7,12 @@ import (
 	"github.com/sonroyaalmerol/go-smb-server/smb/wire"
 )
 
-func (c *conn) handleLock(_ context.Context, msg []byte, hdr *wire.Header, tr *tree) uint32 {
+func (c *request) handleLock(_ context.Context, msg []byte, hdr *wire.Header, tr *tree) uint32 {
 	var req wire.LockRequest
 	if err := req.Parse(msg); err != nil {
 		return c.errBody(wire.StatusInvalidParameter)
 	}
-	oh, ok := tr.opens[req.FileId]
+	oh, ok := tr.open(req.FileId)
 	if !ok {
 		return c.errBody(wire.StatusInvalidHandle)
 	}
@@ -67,7 +67,7 @@ func (c *conn) handleLock(_ context.Context, msg []byte, hdr *wire.Header, tr *t
 	return wire.StatusSuccess
 }
 
-func (c *conn) handleIoctl(ctx context.Context, msg []byte, tr *tree) uint32 {
+func (c *request) handleIoctl(ctx context.Context, msg []byte, tr *tree) uint32 {
 	var req wire.IoctlRequest
 	if err := req.Parse(msg); err != nil {
 		return c.errBody(wire.StatusInvalidParameter)
@@ -85,7 +85,7 @@ func (c *conn) handleIoctl(ctx context.Context, msg []byte, tr *tree) uint32 {
 		return wire.StatusSuccess
 	case wire.FSCTLPipeTransceive:
 		if tr != nil {
-			if oh, ok := tr.opens[req.FileId]; ok {
+			if oh, ok := tr.open(req.FileId); ok {
 				if pp, ok2 := oh.h.(vfs.PipeProcessor); ok2 {
 					result := pp.ProcessPipe(ctx, req.Input)
 					c.out = wire.IoctlResponseAppend(c.out, req.CtlCode, req.FileId, nil, result, req.Flags)
@@ -98,7 +98,7 @@ func (c *conn) handleIoctl(ctx context.Context, msg []byte, tr *tree) uint32 {
 		if tr == nil {
 			return c.errBody(wire.StatusInvalidDeviceRequest)
 		}
-		if _, ok := tr.opens[req.FileId]; !ok {
+		if _, ok := tr.open(req.FileId); !ok {
 			return c.errBody(wire.StatusInvalidHandle)
 		}
 		return c.errBody(wire.StatusNotSupported)

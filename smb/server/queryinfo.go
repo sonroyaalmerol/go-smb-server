@@ -8,12 +8,12 @@ import (
 	"github.com/sonroyaalmerol/go-smb-server/smb/wire"
 )
 
-func (c *conn) handleQueryInfo(ctx context.Context, msg []byte, tr *tree) uint32 {
+func (c *request) handleQueryInfo(ctx context.Context, msg []byte, tr *tree) uint32 {
 	var req wire.QueryInfoRequest
 	if err := req.Parse(msg); err != nil {
 		return c.errBody(wire.StatusInvalidParameter)
 	}
-	oh, ok := tr.opens[req.FileId]
+	oh, ok := tr.open(req.FileId)
 	if !ok {
 		return c.errBody(wire.StatusInvalidHandle)
 	}
@@ -230,12 +230,12 @@ func pathIndexNumber(path string) uint64 {
 	return hash
 }
 
-func (c *conn) handleSetInfo(ctx context.Context, msg []byte, tr *tree) uint32 {
+func (c *request) handleSetInfo(ctx context.Context, msg []byte, tr *tree) uint32 {
 	var req wire.SetInfoRequest
 	if err := req.Parse(msg); err != nil {
 		return c.errBody(wire.StatusInvalidParameter)
 	}
-	oh, ok := tr.opens[req.FileId]
+	oh, ok := tr.open(req.FileId)
 	if !ok {
 		return c.errBody(wire.StatusInvalidHandle)
 	}
@@ -347,7 +347,7 @@ func (c *conn) handleSetInfo(ctx context.Context, msg []byte, tr *tree) uint32 {
 	return c.errBody(wire.StatusNotSupported)
 }
 
-func (c *conn) handleFlush(_ context.Context, _ []byte, _ *tree) uint32 {
+func (c *request) handleFlush(_ context.Context, _ []byte, _ *tree) uint32 {
 	c.out = wire.FlushResponseAppend(c.out)
 	return wire.StatusSuccess
 }

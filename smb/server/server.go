@@ -32,19 +32,20 @@ const (
 )
 
 type Server struct {
-	addr        string
-	authFactory auth.Factory
-	shares      []vfs.Share
-	shareByName map[string]vfs.Share
-	dialect     uint16
-	locker      vfs.ByteRangeLocker
-	maxTransact uint32
-	maxRead     uint32
-	maxWrite    uint32
-	maxCredits  uint32
-	requireEnc  bool
-	log         *slog.Logger
-	guid        [16]byte
+	addr          string
+	authFactory   auth.Factory
+	shares        []vfs.Share
+	shareByName   map[string]vfs.Share
+	dialect       uint16
+	locker        vfs.ByteRangeLocker
+	maxConcurrent int
+	maxTransact   uint32
+	maxRead       uint32
+	maxWrite      uint32
+	maxCredits    uint32
+	requireEnc    bool
+	log           *slog.Logger
+	guid          [16]byte
 
 	mu       sync.Mutex
 	listener net.Listener
@@ -71,18 +72,26 @@ func WithEncryptionRequired() Option { return func(s *Server) { s.requireEnc = t
 // over other protocols.
 func WithLocker(l vfs.ByteRangeLocker) Option { return func(s *Server) { s.locker = l } }
 
+// WithMaxConcurrentRequests bounds how many reads and writes a single
+// connection handles at once. 0 selects the default; 1 handles every request
+// in turn, as the server did before.
+func WithMaxConcurrentRequests(n int) Option {
+	return func(s *Server) { s.maxConcurrent = n }
+}
+
 func WithDialect(d uint16) Option { return func(s *Server) { s.dialect = d } }
 
 func New(opts ...Option) (*Server, error) {
 	s := &Server{
-		addr:        ":445",
-		dialect:     wire.DialectSMB302,
-		locker:      newMemLocker(),
-		maxTransact: defaultMaxTransact,
-		maxRead:     defaultMaxRead,
-		maxWrite:    defaultMaxWrite,
-		maxCredits:  defaultMaxCredits,
-		log:         slog.Default(),
+		addr:          ":445",
+		dialect:       wire.DialectSMB302,
+		locker:        newMemLocker(),
+		maxConcurrent: defaultMaxConcurrent,
+		maxTransact:   defaultMaxTransact,
+		maxRead:       defaultMaxRead,
+		maxWrite:      defaultMaxWrite,
+		maxCredits:    defaultMaxCredits,
+		log:           slog.Default(),
 	}
 	for _, opt := range opts {
 		opt(s)
@@ -169,6 +178,7 @@ type session struct {
 	auth           auth.Authenticator
 	identity       *auth.Identity
 	authenticated  bool
+	mu             sync.RWMutex
 	trees          map[uint32]*tree
 	nextTreeID     uint32
 	signer         *signing.Signer
@@ -182,9 +192,51 @@ type session struct {
 
 type tree struct {
 	share   vfs.Share
+	mu      sync.RWMutex
 	opens   map[[16]byte]*openHandle
 	nextID  uint64
 	oplocks *oplockTable
+}
+
+// open returns an open handle by id.
+func (t *tree) open(id [16]byte) (*openHandle, bool) {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	oh, ok := t.opens[id]
+	return oh, ok
+}
+
+// addOpen records a new open handle and returns its id.
+func (t *tree) addOpen(oh *openHandle) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.opens[oh.fileId] = oh
+}
+
+// removeOpen forgets an open handle.
+func (t *tree) removeOpen(id [16]byte) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	delete(t.opens, id)
+}
+
+// allOpens is a snapshot of the tree's open handles.
+func (t *tree) allOpens() []*openHandle {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	opens := make([]*openHandle, 0, len(t.opens))
+	for _, oh := range t.opens {
+		opens = append(opens, oh)
+	}
+	return opens
+}
+
+// nextFileID hands out the next open counter.
+func (t *tree) nextFileID() uint64 {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.nextID++
+	return t.nextID
 }
 
 type openHandle struct {
@@ -205,21 +257,35 @@ type openHandle struct {
 	enumIndex   int
 }
 
+// request is one message being handled. It embeds the connection, so
+// handlers reach shared state as before, but owns the buffer its response is
+// built in: that is what lets several requests be handled at once.
+type request struct {
+	*conn
+	out []byte
+}
+
 type conn struct {
 	srv           *Server
 	fc            *transport.FramedConn
 	log           *slog.Logger
-	out           []byte
+	sessionsMu    sync.RWMutex
 	sessions      map[uint64]*session
 	nextSess      uint64
+	creditMu      sync.Mutex
 	creditBalance uint32
 
 	nextAsync    uint64
 	pending      map[uint64]*pendingOp
 	pendingByMsg map[uint64]*pendingOp
 	pendingMu    sync.Mutex
-	asyncResp    chan []byte
+	outbox       chan []byte
 	connDone     chan struct{}
+	writerDone   chan struct{}
+	// inflight bounds concurrent request handlers, and handlers tracks them
+	// so the connection waits for them before closing its open files.
+	inflight chan struct{}
+	handlers sync.WaitGroup
 
 	preauthHash []byte
 
@@ -245,18 +311,19 @@ func (s *Server) serveConn(ctx context.Context, c net.Conn) {
 		creditBalance: 1,
 		pending:       make(map[uint64]*pendingOp),
 		pendingByMsg:  make(map[uint64]*pendingOp),
-		asyncResp:     make(chan []byte, 64),
+		outbox:        make(chan []byte, 64),
 		connDone:      make(chan struct{}),
+		writerDone:    make(chan struct{}),
+		inflight:      make(chan struct{}, s.concurrentRequests()),
 		preauthHash:   sha.Sum(nil),
 	}
 	defer cn.cleanup()
+	go cn.writeLoop()
 
 	for {
 		if err := ctx.Err(); err != nil {
 			return
 		}
-		cn.drainAsync()
-
 		_ = cn.fc.Underlying().SetReadDeadline(time.Now().Add(200 * time.Millisecond))
 		msg, err := cn.fc.ReadMessage()
 		if err != nil {
@@ -275,12 +342,9 @@ func (s *Server) serveConn(ctx context.Context, c net.Conn) {
 			// Windows opens with an SMB1 multi-protocol negotiate listing
 			// "SMB 2.???". Answering with the wildcard dialect makes it
 			// retry in SMB2; ignoring it makes the client hang, then reset.
-			cn.out = cn.out[:0]
-			cn.replyWildcardNegotiate()
-			if err := cn.fc.WriteMessage(cn.out); err != nil {
-				cn.log.Debug("write error", "err", err)
-				return
-			}
+			r := &request{conn: cn}
+			r.replyWildcardNegotiate()
+			cn.send(r.out)
 			continue
 		}
 
@@ -299,7 +363,6 @@ func (s *Server) serveConn(ctx context.Context, c net.Conn) {
 			}
 		}
 
-		cn.out = cn.out[:0]
 		cmdBefore := uint16(0xFFFF)
 		if len(msg) >= wire.HeaderSize {
 			cmdBefore = binary.LittleEndian.Uint16(msg[12:14])
@@ -307,16 +370,29 @@ func (s *Server) serveConn(ctx context.Context, c net.Conn) {
 		if cmdBefore == wire.CmdNegotiate || cmdBefore == wire.CmdSessionSetup {
 			cn.updatePreauth(msg)
 		}
-		cn.handleMessage(connCtx, msg)
-		if len(cn.out) > 0 {
-			if sealed, ok := cn.maybeSealResponse(cn.out); ok {
-				cn.out = sealed
-			}
-			if err := cn.fc.WriteMessage(cn.out); err != nil {
-				cn.log.Debug("write error", "err", err)
+		if cn.canHandleConcurrently(msg) {
+			// ReadMessage hands back a buffer it reuses, so a request that
+			// outlives this loop iteration needs its own copy.
+			queued := append([]byte(nil), msg...)
+			select {
+			case cn.inflight <- struct{}{}:
+			case <-connCtx.Done():
 				return
 			}
+			cn.handlers.Add(1)
+			go func() {
+				defer cn.handlers.Done()
+				defer func() { <-cn.inflight }()
+				r := &request{conn: cn}
+				r.handleMessage(connCtx, queued)
+				cn.send(r.out)
+			}()
+			continue
 		}
+
+		r := &request{conn: cn}
+		r.handleMessage(connCtx, msg)
+		cn.send(r.out)
 	}
 }
 
@@ -332,7 +408,7 @@ func isSMB1Negotiate(msg []byte) bool {
 // replyWildcardNegotiate answers an SMB1 negotiate with an SMB2 negotiate
 // response carrying the wildcard dialect, so the client renegotiates in
 // SMB2 (MS-SMB2 section 3.3.5.3.1).
-func (c *conn) replyWildcardNegotiate() {
+func (c *request) replyWildcardNegotiate() {
 	hdr := wire.NewHeader(wire.CmdNegotiate)
 	hdr.Flags = wire.FlagServerToRedir
 	hdr.Credit = 1
@@ -350,21 +426,82 @@ func (c *conn) replyWildcardNegotiate() {
 	c.out = resp.Append(c.out)
 }
 
-func (c *conn) drainAsync() {
+// defaultMaxConcurrent is how many reads and writes one connection handles at
+// once by default. Requests wait on the object store far more than on the
+// gateway, so handling them in turn would leave a client waiting a round trip
+// per request.
+const defaultMaxConcurrent = 64
+
+// concurrentRequests is the configured bound, with 0 meaning the default.
+func (s *Server) concurrentRequests() int {
+	if s.maxConcurrent > 0 {
+		return s.maxConcurrent
+	}
+	return defaultMaxConcurrent
+}
+
+// canHandleConcurrently reports whether a message can be handled off the read
+// loop. Only reads and writes qualify: they use a file handle that already
+// exists, while every other request may create or destroy session, tree, or
+// handle state, which stays ordered on the read loop. Compound and related
+// requests stay there too, because their parts share state.
+func (c *conn) canHandleConcurrently(msg []byte) bool {
+	if c.srv.concurrentRequests() <= 1 || len(msg) < wire.HeaderSize || msg[0] != wire.SMB2ProtocolId[0] {
+		return false
+	}
+	var hdr wire.Header
+	if err := hdr.Parse(msg); err != nil {
+		return false
+	}
+	if hdr.NextCommand != 0 || hdr.Flags&wire.FlagRelatedOps != 0 {
+		return false
+	}
+	if hdr.Command != wire.CmdRead && hdr.Command != wire.CmdWrite {
+		return false
+	}
+	sess := c.getSession(hdr.SessionId)
+	return sess != nil && sess.authenticated
+}
+
+// writeLoop owns the connection's output: every response is written here, so
+// handlers can run in more than one goroutine without interleaving frames.
+// A write error closes the connection, which ends the read loop too.
+func (c *conn) writeLoop() {
+	defer close(c.writerDone)
 	for {
 		select {
-		case resp := <-c.asyncResp:
+		case resp := <-c.outbox:
+			if sealed, ok := c.maybeSealResponse(resp); ok {
+				resp = sealed
+			}
 			if err := c.fc.WriteMessage(resp); err != nil {
-				c.log.Debug("write async error", "err", err)
+				c.log.Debug("write error", "err", err)
+				_ = c.fc.Underlying().Close()
 				return
 			}
-		default:
+		case <-c.connDone:
 			return
 		}
 	}
 }
 
-func (c *conn) handleMessage(ctx context.Context, msg []byte) {
+// send queues a response. The buffer must not be modified afterwards.
+func (c *conn) send(resp []byte) {
+	select {
+	case c.outbox <- resp:
+	case <-c.connDone:
+	}
+}
+
+// sendCopy queues a copy of a response built in a shared buffer.
+func (c *conn) sendCopy(resp []byte) {
+	if len(resp) == 0 {
+		return
+	}
+	c.send(append([]byte(nil), resp...))
+}
+
+func (c *request) handleMessage(ctx context.Context, msg []byte) {
 	off := 0
 	first := true
 	chainFailed := false
@@ -386,12 +523,7 @@ func (c *conn) handleMessage(ctx context.Context, msg []byte) {
 			}
 		}
 
-		charge := uint32(hdr.CreditCharge)
-		if c.creditBalance >= charge {
-			c.creditBalance -= charge
-		} else {
-			c.creditBalance = 0
-		}
+		c.chargeCredits(uint32(hdr.CreditCharge))
 
 		if sess := c.getSession(hdr.SessionId); sess != nil && sess.signer != nil {
 			if hdr.Flags&wire.FlagSigned != 0 {
@@ -451,8 +583,7 @@ func (c *conn) handleMessage(ctx context.Context, msg []byte) {
 			chainFailed = true
 		}
 
-		grant := c.srv.maxCredits - c.creditBalance
-		c.creditBalance += grant
+		grant := c.grantCredits()
 		if grant > 0xFFFF {
 			hdr.Credit = 0xFFFF
 		} else {
@@ -512,10 +643,67 @@ func fileIdOffset(cmd uint16) int {
 	}
 }
 
-func (c *conn) getSession(id uint64) *session { return c.sessions[id] }
+// chargeCredits deducts what a request costs, never below zero.
+func (c *conn) chargeCredits(charge uint32) {
+	c.creditMu.Lock()
+	defer c.creditMu.Unlock()
+	if c.creditBalance >= charge {
+		c.creditBalance -= charge
+		return
+	}
+	c.creditBalance = 0
+}
+
+// grantCredits tops the client back up to the server's maximum and reports
+// how many credits that took.
+func (c *conn) grantCredits() uint32 {
+	c.creditMu.Lock()
+	defer c.creditMu.Unlock()
+	grant := c.srv.maxCredits - c.creditBalance
+	c.creditBalance += grant
+	return grant
+}
+
+func (c *conn) getSession(id uint64) *session {
+	c.sessionsMu.RLock()
+	defer c.sessionsMu.RUnlock()
+	return c.sessions[id]
+}
+
+func (c *conn) putSession(id uint64, sess *session) {
+	c.sessionsMu.Lock()
+	defer c.sessionsMu.Unlock()
+	c.sessions[id] = sess
+}
+
+func (c *conn) dropSession(id uint64) {
+	c.sessionsMu.Lock()
+	defer c.sessionsMu.Unlock()
+	delete(c.sessions, id)
+}
+
+// eachSession calls fn for every session on the connection.
+func (c *conn) eachSession(fn func(*session)) {
+	c.sessionsMu.RLock()
+	sessions := make([]*session, 0, len(c.sessions))
+	for _, sess := range c.sessions {
+		sessions = append(sessions, sess)
+	}
+	c.sessionsMu.RUnlock()
+	for _, sess := range sessions {
+		fn(sess)
+	}
+}
 
 func (c *conn) cleanup() {
 	close(c.connDone)
+	c.handlers.Wait()
+	// Let the writer finish what it has queued, but do not wait on a client
+	// that has stopped reading.
+	select {
+	case <-c.writerDone:
+	case <-time.After(cleanupCloseTimeout):
+	}
 	c.pendingMu.Lock()
 	for _, op := range c.pending {
 		op.cancel()
@@ -526,11 +714,11 @@ func (c *conn) cleanup() {
 
 	ctx, cancel := context.WithTimeout(context.Background(), cleanupCloseTimeout)
 	defer cancel()
-	for _, sess := range c.sessions {
-		for _, tr := range sess.trees {
+	c.eachSession(func(sess *session) {
+		for _, tr := range sess.allTrees() {
 			c.closeAllOpens(ctx, tr)
 		}
-	}
+	})
 }
 
 func (c *conn) updatePreauth(msg []byte) {
@@ -543,4 +731,31 @@ func (c *conn) updatePreauth(msg []byte) {
 	c.preauthHash = sha.Sum(nil)
 }
 
-func (s *session) getTree(id uint32) *tree { return s.trees[id] }
+func (s *session) getTree(id uint32) *tree {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.trees[id]
+}
+
+func (s *session) addTree(id uint32, t *tree) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.trees[id] = t
+}
+
+func (s *session) dropTree(id uint32) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.trees, id)
+}
+
+// allTrees is a snapshot of the session's tree connects.
+func (s *session) allTrees() []*tree {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	trees := make([]*tree, 0, len(s.trees))
+	for _, t := range s.trees {
+		trees = append(trees, t)
+	}
+	return trees
+}
