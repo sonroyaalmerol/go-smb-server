@@ -53,12 +53,12 @@ type notifyEvent struct {
 	name   string
 }
 
-func (c *conn) handleChangeNotify(ctx context.Context, msg []byte, hdr *wire.Header, tr *tree) (uint32, bool) {
+func (c *request) handleChangeNotify(ctx context.Context, msg []byte, hdr *wire.Header, tr *tree) (uint32, bool) {
 	var req changeNotifyRequest
 	if err := req.Parse(msg); err != nil {
 		return c.errBody(wire.StatusInvalidParameter), false
 	}
-	oh, ok := tr.opens[req.FileId]
+	oh, ok := tr.open(req.FileId)
 	if !ok {
 		return c.errBody(wire.StatusInvalidHandle), false
 	}
@@ -149,7 +149,7 @@ func buildChangeNotifyBody(events []notifyEvent, maxLen uint32) []byte {
 	return out
 }
 
-func (c *conn) handleCancel(_ []byte, hdr *wire.Header) uint32 {
+func (c *request) handleCancel(_ []byte, hdr *wire.Header) uint32 {
 	c.cancelPending(hdr.AsyncId)
 	c.out = append(c.out, 0x04, 0x00, 0x00, 0x00)
 	return wire.StatusSuccess

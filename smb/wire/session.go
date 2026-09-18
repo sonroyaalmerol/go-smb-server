@@ -46,7 +46,7 @@ func (r *SessionSetupResponse) Append(dst []byte) []byte {
 	b := out[start:]
 	put16(b[0:2], 9)
 	put16(b[2:4], r.SessionFlags)
-	put16(b[4:6], uint16(start+fixed))
+	put16(b[4:6], HeaderSize+fixed)
 	put16(b[6:8], uint16(len(r.SecurityBuffer)))
 	copy(b[fixed:], r.SecurityBuffer)
 	return out
