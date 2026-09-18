@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"sync"
 )
 
 const (
@@ -29,7 +30,11 @@ type FramedConn struct {
 	w       io.Writer
 	rawConn net.Conn
 	readBuf []byte
-	hdrBuf  [HeaderLen]byte
+	// Reading and writing keep their own frame headers, so one goroutine can
+	// read while another writes.
+	readHdr  [HeaderLen]byte
+	writeMu  sync.Mutex
+	writeHdr [HeaderLen]byte
 }
 
 func NewFramedConn(c net.Conn) *FramedConn {
@@ -40,13 +45,13 @@ func NewFramedConn(c net.Conn) *FramedConn {
 }
 
 func (f *FramedConn) ReadMessage() ([]byte, error) {
-	if _, err := io.ReadFull(f.r, f.hdrBuf[:]); err != nil {
+	if _, err := io.ReadFull(f.r, f.readHdr[:]); err != nil {
 		return nil, fmt.Errorf("transport: read frame header: %w", err)
 	}
-	if f.hdrBuf[0] != 0x00 {
-		return nil, fmt.Errorf("transport: unexpected frame type byte 0x%02x", f.hdrBuf[0])
+	if f.readHdr[0] != 0x00 {
+		return nil, fmt.Errorf("transport: unexpected frame type byte 0x%02x", f.readHdr[0])
 	}
-	n := int(readUint24(f.hdrBuf[1:]))
+	n := int(readUint24(f.readHdr[1:]))
 	if n == 0 {
 		f.readBuf = f.readBuf[:0]
 		return f.readBuf, nil
@@ -72,10 +77,15 @@ func (f *FramedConn) WriteMessage(payload []byte) error {
 	if uint32(len(payload)) > MaxMessageLen {
 		return fmt.Errorf("%w: %d bytes", ErrFrameTooLarge, len(payload))
 	}
-	f.hdrBuf[0] = 0x00
-	writeUint24(f.hdrBuf[1:], uint32(len(payload)))
+	// One writer at a time: the header and the body must not interleave with
+	// another frame.
+	f.writeMu.Lock()
+	defer f.writeMu.Unlock()
 
-	if _, err := f.w.Write(f.hdrBuf[:]); err != nil {
+	f.writeHdr[0] = 0x00
+	writeUint24(f.writeHdr[1:], uint32(len(payload)))
+
+	if _, err := f.w.Write(f.writeHdr[:]); err != nil {
 		return fmt.Errorf("transport: write frame header: %w", err)
 	}
 	if _, err := f.w.Write(payload); err != nil {

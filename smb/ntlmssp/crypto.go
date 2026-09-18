@@ -37,16 +37,20 @@ const (
 	FlagNegotiate56          uint32 = 0x80000000
 )
 
+// serverChallengeFlags are the flags in the CHALLENGE_MESSAGE. Do not add
+// FlagNegotiateVersion: the message carries no Version field, and Windows
+// rejects a challenge that claims one with an all-zero version, failing the
+// session setup with STATUS_INVALID_PARAMETER.
 const serverChallengeFlags = FlagNegotiateUnicode |
 	FlagRequestTarget |
 	FlagNegotiateNTLM |
 	FlagNegotiateSign |
-	FlagNegotiateSeal |
 	FlagNegotiateAlwaysSign |
 	FlagNegotiateExtSecurity |
 	FlagNegotiateTargetInfo |
+	FlagTargetTypeServer |
 	FlagNegotiate128 |
-	FlagNegotiateVersion |
+	FlagNegotiate56 |
 	FlagNegotiateKeyExch
 
 func NTOWFv2(password, user, domain string) []byte {

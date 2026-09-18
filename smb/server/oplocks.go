@@ -67,12 +67,12 @@ func (c *conn) sendOplockBreak(info *oplockInfo) {
 	msg[71] = 0
 	copy(msg[72:88], info.fileId[:])
 	select {
-	case c.asyncResp <- msg[:]:
+	case c.outbox <- msg[:]:
 	case <-c.connDone:
 	}
 }
 
-func (c *conn) handleOplockBreak(msg []byte) uint32 {
+func (c *request) handleOplockBreak(msg []byte) uint32 {
 	if len(msg) < wire.HeaderSize+24 {
 		return c.errBody(wire.StatusInvalidParameter)
 	}
