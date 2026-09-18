@@ -25,6 +25,7 @@ const (
 	StatusInvalidInfoClass       uint32 = 0xC0000003
 	StatusInfoLengthMismatch     uint32 = 0xC0000004
 	StatusSharingViolation       uint32 = 0xC0000043
+	StatusLockNotGranted         uint32 = 0xC0000055
 	StatusNotADirectory          uint32 = 0xC0000103
 	StatusLogonFailure           uint32 = 0xC000006D
 	StatusBadNetworkName         uint32 = 0xC00000CC

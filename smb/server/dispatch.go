@@ -61,7 +61,7 @@ func (c *conn) dispatch(ctx context.Context, msg []byte, hdr *wire.Header, lastF
 	case wire.CmdFlush:
 		return c.handleFlush(ctx, msg, tr)
 	case wire.CmdLock:
-		return c.handleLock(ctx, msg, tr)
+		return c.handleLock(ctx, msg, hdr, tr)
 	case wire.CmdIoctl:
 		return c.handleIoctl(ctx, msg, tr)
 	case wire.CmdEcho:
@@ -230,7 +230,6 @@ func (c *conn) handleTreeConnect(msg []byte, hdr *wire.Header, sess *session) ui
 	sess.trees[treeID] = &tree{
 		share: sh,
 		opens: make(map[[16]byte]*openHandle),
-		locks: newLockMgrSet(),
 	}
 	hdr.TreeId = treeID
 
@@ -267,6 +266,7 @@ func (c *conn) handleTreeDisconnect(ctx context.Context, hdr *wire.Header, sess 
 
 func (c *conn) closeAllOpens(ctx context.Context, tr *tree) {
 	for _, oh := range tr.opens {
+		c.srv.lockTable().ReleaseOwner(lockOwner(oh.sessionID, oh.fileId))
 		_ = oh.h.Close(ctx)
 	}
 	tr.opens = make(map[[16]byte]*openHandle)
@@ -300,7 +300,8 @@ func (c *conn) handleCreate(ctx context.Context, msg []byte, hdr *wire.Header, t
 	fid := makeFileID(hdr.SessionId, hdr.TreeId, tr.nextID)
 	c.log.Debug("create", "path", name, "disposition", req.CreateDisposition,
 		"desired_access", req.DesiredAccess, "options", req.CreateOptions)
-	oh := &openHandle{h: h, fileId: fid, path: name, deletePending: req.CreateOptions&wire.FileDeleteOnClose != 0}
+	oh := &openHandle{h: h, fileId: fid, sessionID: hdr.SessionId, path: name,
+		deletePending: req.CreateOptions&wire.FileDeleteOnClose != 0}
 	tr.opens[fid] = oh
 	*lastFileId = fid
 

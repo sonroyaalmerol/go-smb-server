@@ -522,13 +522,16 @@ func (r *LockRequest) Parse(msg []byte) error {
 	}
 	count := int(binary.LittleEndian.Uint16(b[2:4]))
 	copy(r.FileId[:], b[8:24])
-	end := 48 + count*24
+	// The lock elements follow the 24-byte fixed part; StructureSize counts
+	// the first of them, which is why it reads 48.
+	const locksOffset = 24
+	end := locksOffset + count*24
 	if createBody+end > len(msg) {
 		return fmt.Errorf("wire: lock: %d locks exceed body", count)
 	}
 	r.Locks = make([]LockElement, count)
 	for i := range r.Locks {
-		off := 48 + i*24
+		off := locksOffset + i*24
 		r.Locks[i].Offset = binary.LittleEndian.Uint64(b[off : off+8])
 		r.Locks[i].Length = binary.LittleEndian.Uint64(b[off+8 : off+16])
 		r.Locks[i].Flags = binary.LittleEndian.Uint32(b[off+16 : off+20])

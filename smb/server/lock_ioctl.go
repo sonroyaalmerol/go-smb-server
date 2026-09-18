@@ -2,79 +2,12 @@ package server
 
 import (
 	"context"
-	"sync"
 
 	"github.com/sonroyaalmerol/go-smb-server/smb/vfs"
 	"github.com/sonroyaalmerol/go-smb-server/smb/wire"
 )
 
-type lockRange struct {
-	start, end uint64
-	exclusive  bool
-}
-
-type lockManager struct {
-	mu     sync.Mutex
-	ranges []lockRange
-}
-
-type lockMgrSet struct {
-	mu   sync.Mutex
-	mgrs map[string]*lockManager
-}
-
-func newLockMgrSet() *lockMgrSet {
-	return &lockMgrSet{mgrs: make(map[string]*lockManager)}
-}
-
-func (s *lockMgrSet) manager(path string) *lockManager {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	m, ok := s.mgrs[path]
-	if !ok {
-		m = &lockManager{}
-		s.mgrs[path] = m
-	}
-	return m
-}
-
-func (m *lockManager) conflicts(start, end uint64, exclusive bool) (int, bool) {
-	for i, r := range m.ranges {
-		overlap := start < r.end && r.start < end
-		if overlap && (r.exclusive || exclusive) {
-			return i, true
-		}
-	}
-	return -1, false
-}
-
-func (m *lockManager) tryLock(start, length uint64, exclusive, failImmediately bool) bool {
-	end := start + length
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if _, conflict := m.conflicts(start, end, exclusive); conflict {
-		if failImmediately {
-			return false
-		}
-		return false
-	}
-	m.ranges = append(m.ranges, lockRange{start: start, end: end, exclusive: exclusive})
-	return true
-}
-
-func (m *lockManager) unlock(start, length uint64) {
-	end := start + length
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	for i, r := range m.ranges {
-		if r.start == start && r.end == end {
-			m.ranges = append(m.ranges[:i], m.ranges[i+1:]...)
-			return
-		}
-	}
-}
-
-func (c *conn) handleLock(_ context.Context, msg []byte, tr *tree) uint32 {
+func (c *conn) handleLock(_ context.Context, msg []byte, hdr *wire.Header, tr *tree) uint32 {
 	var req wire.LockRequest
 	if err := req.Parse(msg); err != nil {
 		return c.errBody(wire.StatusInvalidParameter)
@@ -83,23 +16,53 @@ func (c *conn) handleLock(_ context.Context, msg []byte, tr *tree) uint32 {
 	if !ok {
 		return c.errBody(wire.StatusInvalidHandle)
 	}
-	lm := tr.locks.manager(oh.path)
-	for _, l := range req.Locks {
-		switch {
-		case l.Flags&wire.LockFlagUnlock != 0:
-			lm.unlock(l.Offset, l.Length)
-		case l.Flags&wire.LockFlagExclusiveLock != 0:
-			if !lm.tryLock(l.Offset, l.Length, true, l.Flags&wire.LockFlagFailImmediately != 0) {
-				return c.errBody(wire.StatusLockConflict)
-			}
-		case l.Flags&wire.LockFlagSharedLock != 0:
-			if !lm.tryLock(l.Offset, l.Length, false, l.Flags&wire.LockFlagFailImmediately != 0) {
-				return c.errBody(wire.StatusLockConflict)
-			}
-		default:
-			return c.errBody(wire.StatusInvalidParameter)
+
+	locker := c.srv.lockTable()
+	owner := lockOwner(hdr.SessionId, req.FileId)
+	// Locks granted in this request are undone if a later element in the
+	// same request fails, so a rejected request changes nothing.
+	var granted []vfs.LockRange
+	unwind := func() {
+		for _, r := range granted {
+			_ = locker.Unlock(owner, oh.path, r)
 		}
 	}
+
+	for _, l := range req.Locks {
+		if l.Flags&wire.LockFlagUnlock != 0 {
+			if err := locker.Unlock(owner, oh.path, lockRange(l.Offset, l.Length, false)); err != nil {
+				unwind()
+				c.log.Debug("unlock failed", "path", oh.path, "err", err)
+				return c.errBody(wire.StatusInvalidParameter)
+			}
+			continue
+		}
+
+		exclusive := l.Flags&wire.LockFlagExclusiveLock != 0
+		if !exclusive && l.Flags&wire.LockFlagSharedLock == 0 {
+			unwind()
+			return c.errBody(wire.StatusInvalidParameter)
+		}
+		r := lockRange(l.Offset, l.Length, exclusive)
+		if r.Start >= r.End {
+			// A zero-length lock covers no bytes and conflicts with nothing.
+			continue
+		}
+		conflict, err := locker.Lock(owner, oh.path, r)
+		if err != nil {
+			unwind()
+			c.log.Debug("lock failed", "path", oh.path, "err", err)
+			return c.errBody(wire.StatusLockNotGranted)
+		}
+		if conflict != nil {
+			unwind()
+			// Blocking locks are not supported: a request that cannot be
+			// granted is refused whether or not FAIL_IMMEDIATELY is set.
+			return c.errBody(wire.StatusLockNotGranted)
+		}
+		granted = append(granted, r)
+	}
+
 	c.out = wire.LockResponseAppend(c.out)
 	return wire.StatusSuccess
 }

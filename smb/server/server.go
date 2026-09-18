@@ -37,6 +37,7 @@ type Server struct {
 	shares      []vfs.Share
 	shareByName map[string]vfs.Share
 	dialect     uint16
+	locker      vfs.ByteRangeLocker
 	maxTransact uint32
 	maxRead     uint32
 	maxWrite    uint32
@@ -65,12 +66,18 @@ func WithMaxCredits(n uint32) Option { return func(s *Server) { s.maxCredits = n
 
 func WithEncryptionRequired() Option { return func(s *Server) { s.requireEnc = true } }
 
+// WithLocker records byte-range locks in l instead of the server's own
+// in-memory table, so locks taken over SMB can share a table with locks taken
+// over other protocols.
+func WithLocker(l vfs.ByteRangeLocker) Option { return func(s *Server) { s.locker = l } }
+
 func WithDialect(d uint16) Option { return func(s *Server) { s.dialect = d } }
 
 func New(opts ...Option) (*Server, error) {
 	s := &Server{
 		addr:        ":445",
 		dialect:     wire.DialectSMB302,
+		locker:      newMemLocker(),
 		maxTransact: defaultMaxTransact,
 		maxRead:     defaultMaxRead,
 		maxWrite:    defaultMaxWrite,
@@ -177,13 +184,13 @@ type tree struct {
 	share   vfs.Share
 	opens   map[[16]byte]*openHandle
 	nextID  uint64
-	locks   *lockMgrSet
 	oplocks *oplockTable
 }
 
 type openHandle struct {
 	h             vfs.Handle
 	fileId        [16]byte
+	sessionID     uint64
 	path          string
 	deletePending bool
 	enumDone      bool
