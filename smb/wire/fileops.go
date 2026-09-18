@@ -286,18 +286,19 @@ const (
 // FileInfoClass values for queries (MS-FSCC section 2.4). Only the classes we
 // implement are listed.
 const (
-	FileBasicInfoClass          uint8 = 0x04
-	FileStandardInfoClass       uint8 = 0x05
-	FileInternalInformation     uint8 = 0x06
-	FileEaInformation           uint8 = 0x07
-	FileNameInformation         uint8 = 0x09
-	FilePositionInformation     uint8 = 0x0E
-	FileModeInformation         uint8 = 0x10
-	FileAllInformation          uint8 = 0x12
-	FileAllocationInformation   uint8 = 0x13
-	FileStreamInformation       uint8 = 0x16
-	FileNetworkOpenInformation  uint8 = 0x22
-	FileAttributeTagInformation uint8 = 0x23
+	FileBasicInfoClass           uint8 = 0x04
+	FileStandardInfoClass        uint8 = 0x05
+	FileInternalInformation      uint8 = 0x06
+	FileEaInformation            uint8 = 0x07
+	FileNameInformation          uint8 = 0x09
+	FilePositionInformation      uint8 = 0x0E
+	FileModeInformation          uint8 = 0x10
+	FileAllInformation           uint8 = 0x12
+	FileAllocationInformation    uint8 = 0x13
+	FileAlternateNameInformation uint8 = 0x15
+	FileStreamInformation        uint8 = 0x16
+	FileNetworkOpenInformation   uint8 = 0x22
+	FileAttributeTagInformation  uint8 = 0x23
 	// FileNormalizedNameInformation is what Windows asks for to learn a
 	// file's canonical name.
 	FileNormalizedNameInformation uint8 = 0x30

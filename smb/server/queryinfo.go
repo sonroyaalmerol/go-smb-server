@@ -53,6 +53,12 @@ func (c *conn) handleQueryInfo(ctx context.Context, msg []byte, tr *tree) uint32
 			info = make([]byte, 8)
 		case wire.FileModeInformation:
 			info = make([]byte, 4)
+		case wire.FileAlternateNameInformation:
+			// No 8.3 aliases are kept, so the name itself is the answer.
+			name := wire.UTF16ToBytes(pathBase(oh.path))
+			info = make([]byte, 4+len(name))
+			putLE32(info[0:4], uint32(len(name)))
+			copy(info[4:], name)
 		case wire.FileNameInformation, wire.FileNormalizedNameInformation:
 			name := wire.UTF16ToBytes(smbPath(oh.path))
 			info = make([]byte, 4+len(name))
@@ -198,6 +204,14 @@ func smbPath(path string) string {
 		return "\\"
 	}
 	return "\\" + path
+}
+
+// pathBase is the last component of a share-relative path.
+func pathBase(path string) string {
+	if i := strings.LastIndexAny(path, "\\/"); i >= 0 {
+		return path[i+1:]
+	}
+	return path
 }
 
 // pathIndexNumber derives a stable file index (inode) from a path. The path
