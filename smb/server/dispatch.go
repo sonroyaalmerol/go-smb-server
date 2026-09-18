@@ -279,9 +279,12 @@ func (c *conn) handleCreate(ctx context.Context, msg []byte, hdr *wire.Header, t
 	}
 	name := wire.UTF16FromBytes(req.Name)
 	opts := vfs.OpenOptions{
-		Path:        name,
-		Disposition: req.CreateDisposition,
-		CreateDir:   req.CreateOptions&wire.FileDirectoryFile != 0,
+		Path:          name,
+		Disposition:   req.CreateDisposition,
+		CreateDir:     req.CreateOptions&wire.FileDirectoryFile != 0,
+		DesiredAccess: req.DesiredAccess,
+		ShareAccess:   req.ShareAccess,
+		DeleteOnClose: req.CreateOptions&wire.FileDeleteOnClose != 0,
 	}
 	h, err := tr.share.Backend().Open(ctx, opts)
 	if err != nil {
