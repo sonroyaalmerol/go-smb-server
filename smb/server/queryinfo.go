@@ -170,13 +170,16 @@ func (c *conn) filesystemInfo(class uint8) []byte {
 		putLE32(out[24:28], 0)
 		return out
 	case wire.FileFsVolumeInformation:
-		label := wire.UTF16ToBytes("SMBShare")
-		out := make([]byte, 16+len(label))
-		out[8] = 0x04
-		for i := range 4 {
-			out[12+i] = byte(uint32(len(label)) >> (8 * i))
-		}
-		copy(out[16:], label)
+		// FILE_FS_VOLUME_INFORMATION (MS-FSCC section 2.5.9): creation time,
+		// serial number, label length, SupportsObjects, Reserved, then the
+		// label at offset 18. Upstream wrote the label at 16 and sized the
+		// buffer two bytes short, which Windows rejects.
+		label := wire.UTF16ToBytes("Bluestone")
+		out := make([]byte, 18+len(label))
+		putLE32(out[8:12], 0x424C5545) // VolumeSerialNumber
+		putLE32(out[12:16], uint32(len(label)))
+		out[16] = 0 // SupportsObjects
+		copy(out[18:], label)
 		return out
 	default:
 		return nil
@@ -262,16 +265,39 @@ func (c *conn) handleSetInfo(ctx context.Context, msg []byte, tr *tree) uint32 {
 				}
 			}
 
-		case wire.FileAllocationInformation, wire.FilePositionInformation, wire.FileModeInformation:
-			// Allocation hints, the client's own file pointer, and caching
-			// mode change nothing on the backend; accepting them keeps
-			// Windows writes working.
+		case wire.FileAllocationInformation:
+			// Setting an allocation size smaller than the file truncates it
+			// (MS-FSCC section 2.4.4). Windows relies on this: PowerShell's
+			// Set-Content empties a file this way before writing, and
+			// ignoring it silently appended to the old contents.
+			if len(req.Buffer) < 8 {
+				return c.errBody(wire.StatusInvalidParameter)
+			}
+			allocation := readLE64(req.Buffer[0:8])
+			fi, err := oh.h.Stat(ctx)
+			if err != nil {
+				return c.errBody(osErrToStatus(err))
+			}
+			if allocation < fi.Size {
+				size := allocation
+				c.log.Debug("truncate for allocation size", "path", oh.path, "size", size)
+				if si, ok := oh.h.(vfs.SetInfoer); ok {
+					if err := si.SetInfo(ctx, &vfs.SetInfoRequest{EndOfFile: &size}); err != nil {
+						return c.errBody(osErrToStatus(err))
+					}
+				}
+			}
+
+		case wire.FilePositionInformation, wire.FileModeInformation:
+			// The client's own file pointer and caching mode change nothing
+			// on the backend.
 
 		case wire.FileEndOfFileInformation:
 			if len(req.Buffer) < 8 {
 				return c.errBody(wire.StatusInvalidParameter)
 			}
 			newSize := readLE64(req.Buffer[0:8])
+			c.log.Debug("set end of file", "path", oh.path, "size", newSize)
 			if si, ok := oh.h.(vfs.SetInfoer); ok {
 				if err := si.SetInfo(ctx, &vfs.SetInfoRequest{EndOfFile: &newSize}); err != nil {
 					return c.errBody(osErrToStatus(err))

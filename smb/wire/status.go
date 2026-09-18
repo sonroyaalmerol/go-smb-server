@@ -23,6 +23,7 @@ const (
 	StatusFileIsADirectory       uint32 = 0xC00000BA
 	StatusNotSupported           uint32 = 0xC00000BB
 	StatusInvalidInfoClass       uint32 = 0xC0000003
+	StatusInfoLengthMismatch     uint32 = 0xC0000004
 	StatusNotADirectory          uint32 = 0xC0000103
 	StatusLogonFailure           uint32 = 0xC000006D
 	StatusBadNetworkName         uint32 = 0xC00000CC

@@ -295,32 +295,33 @@ func (c *conn) handleCreate(ctx context.Context, msg []byte, hdr *wire.Header, t
 
 	tr.nextID++
 	fid := makeFileID(hdr.SessionId, hdr.TreeId, tr.nextID)
+	c.log.Debug("create", "path", name, "disposition", req.CreateDisposition,
+		"desired_access", req.DesiredAccess, "options", req.CreateOptions)
 	oh := &openHandle{h: h, fileId: fid, path: name, deletePending: req.CreateOptions&wire.FileDeleteOnClose != 0}
 	tr.opens[fid] = oh
 	*lastFileId = fid
 
+	// CreateAction tells the client what the open actually did (MS-SMB2
+	// section 2.2.14).
 	action := wire.FileOpened
 	switch req.CreateDisposition {
 	case wire.FileCreate:
 		action = wire.FileCreated
-	case wire.FileSupersede, wire.FileOverwriteIf:
+	case wire.FileSupersede:
+		action = wire.FileSuperseded
+	case wire.FileOverwrite:
+		action = wire.FileOverwritten
+	case wire.FileOverwriteIf:
 		action = wire.FileOverwritten
 	}
 
+	// Grant no oplock. Granting one lets the client cache the file and write
+	// its cached copy back later, but breaking an oplock is not implemented
+	// here, and the same objects are also reachable over NFS and directly in
+	// the object store. With no oplock, clients write through: Windows
+	// PowerShell's Set-Content otherwise flushed stale cached content and
+	// silently appended to files instead of replacing them.
 	var oplock uint8
-	if req.RequestedOplockLevel != 0 {
-		if tr.oplocks == nil {
-			tr.oplocks = newOplockTable()
-		}
-		info := &oplockInfo{fileId: fid, sessID: hdr.SessionId, treeID: hdr.TreeId, path: name}
-		if tr.oplocks.grant(name, info) {
-			oplock = req.RequestedOplockLevel
-		} else {
-			if broken := tr.oplocks.breakOplock(name); broken != nil {
-				c.sendOplockBreak(broken)
-			}
-		}
-	}
 
 	resp := wire.CreateResponse{
 		OplockLevel:    oplock,
@@ -349,15 +350,16 @@ const (
 )
 
 // toFileAttributes reports the backend's attributes, with the directory bit
-// forced to match the entry itself. A file with no attributes is reported as
-// FILE_ATTRIBUTE_NORMAL, which clients require.
+// forced to match the entry itself. A file with no stored attributes is
+// reported as FILE_ATTRIBUTE_ARCHIVE, which is what Windows servers and
+// Samba report for an ordinary file.
 func toFileAttributes(fi vfs.FileInfo) uint32 {
 	attrs := fi.Attributes & (attrReadOnly | attrHidden | attrSystem | attrArchive)
 	if fi.IsDir {
 		return attrs | attrDirectory
 	}
 	if attrs == 0 {
-		return attrNormal
+		return attrArchive
 	}
 	return attrs
 }
@@ -435,6 +437,7 @@ func (c *conn) handleWrite(ctx context.Context, msg []byte, tr *tree) uint32 {
 	if !ok {
 		return c.errBody(wire.StatusInvalidHandle)
 	}
+	c.log.Debug("write", "path", oh.path, "offset", req.Offset, "len", len(req.Data))
 	n, err := oh.h.Write(ctx, int64(req.Offset), req.Data)
 	if err != nil {
 		return c.errBody(osErrToStatus(err))
@@ -453,11 +456,13 @@ func (c *conn) handleQueryDirectory(ctx context.Context, msg []byte, tr *tree) u
 		return c.errBody(wire.StatusInvalidHandle)
 	}
 
-	if req.Flags&(wire.QueryDirRestartScans|wire.QueryDirReopen) != 0 {
-		oh.enumDone = false
-	}
 	oh.enumMu.Lock()
 	defer oh.enumMu.Unlock()
+
+	if req.Flags&(wire.QueryDirRestartScans|wire.QueryDirReopen) != 0 {
+		oh.enumDone = false
+		oh.enumStarted = false
+	}
 	if oh.enumDone {
 		return c.errBody(wire.StatusNoMoreFiles)
 	}
@@ -465,6 +470,24 @@ func (c *conn) handleQueryDirectory(ctx context.Context, msg []byte, tr *tree) u
 	pattern := wire.UTF16FromBytes(req.FileName)
 	if pattern == "" {
 		pattern = "*"
+	}
+
+	// Capture the listing on the first call, then serve it in batches: a
+	// client that asked for a single entry comes back for the rest.
+	if !oh.enumStarted {
+		oh.enumEntries = oh.enumEntries[:0]
+		oh.enumIndex = 0
+		for fi, err := range oh.h.Enumerate(ctx, pattern) {
+			if err != nil {
+				return c.errBody(osErrToStatus(err))
+			}
+			oh.enumEntries = append(oh.enumEntries, fi)
+		}
+		oh.enumStarted = true
+	}
+	if oh.enumIndex >= len(oh.enumEntries) {
+		oh.enumDone = true
+		return c.errBody(wire.StatusNoMoreFiles)
 	}
 
 	// Encode the class the client asked for: each has a different fixed part
@@ -483,15 +506,14 @@ func (c *conn) handleQueryDirectory(ctx context.Context, msg []byte, tr *tree) u
 
 	var prevEntryStart = -1
 	empty := true
-	for fi, err := range oh.h.Enumerate(ctx, pattern) {
-		if err != nil {
-			if empty {
-				c.out = c.out[:bodyStart]
-				return c.errBody(osErrToStatus(err))
-			}
-			break
-		}
+	for ; oh.enumIndex < len(oh.enumEntries); oh.enumIndex++ {
+		fi := oh.enumEntries[oh.enumIndex]
 		if len(c.out)-bufStart+entryMinSize+len(fi.Name)*2 > int(req.OutputBufferLength) {
+			if empty {
+				// Not even one entry fits in the buffer the client offered.
+				c.out = c.out[:bodyStart]
+				return c.errBody(wire.StatusInfoLengthMismatch)
+			}
 			break
 		}
 		encFi := wire.FileInfo{
@@ -514,10 +536,16 @@ func (c *conn) handleQueryDirectory(ctx context.Context, msg []byte, tr *tree) u
 		}
 		prevEntryStart = entryStart
 		empty = false
+		if req.Flags&wire.QueryDirReturnSingle != 0 {
+			// The client asked for one entry and will come back for more.
+			oh.enumIndex++
+			break
+		}
 	}
 
 	if empty {
 		c.out = c.out[:bodyStart]
+		oh.enumDone = true
 		return c.errBody(wire.StatusNoMoreFiles)
 	}
 
@@ -527,7 +555,6 @@ func (c *conn) handleQueryDirectory(ctx context.Context, msg []byte, tr *tree) u
 	// bytes before the body, plus the 8-byte fixed part.
 	binary.LittleEndian.PutUint16(c.out[bodyStart+2:bodyStart+4], wire.HeaderSize+8)
 	binary.LittleEndian.PutUint32(c.out[bodyStart+4:bodyStart+8], uint32(bufLen))
-	oh.enumDone = true
 	return wire.StatusSuccess
 }
 

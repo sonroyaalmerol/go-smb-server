@@ -188,6 +188,14 @@ type openHandle struct {
 	deletePending bool
 	enumDone      bool
 	enumMu        sync.Mutex
+
+	// Directory enumeration is paged: clients ask repeatedly, sometimes one
+	// entry at a time, until the server reports no more files. The entries
+	// are captured on the first call so later calls continue where the
+	// previous one stopped.
+	enumStarted bool
+	enumEntries []vfs.FileInfo
+	enumIndex   int
 }
 
 type conn struct {
