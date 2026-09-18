@@ -111,7 +111,7 @@ func (c *conn) handleIoctl(ctx context.Context, msg []byte, tr *tree) uint32 {
 	}
 	switch req.CtlCode {
 	case wire.FSCTLValidateNegotiateInfo:
-		resp := buildValidateNegotiateInfo(c.srv.dialect, c.srv.guid)
+		resp := buildValidateNegotiateInfo(c.negDialect, c.negCaps, c.srv.guid)
 		c.out = wire.IoctlResponseAppend(c.out, req.CtlCode, req.FileId, nil, resp, req.Flags)
 		return wire.StatusSuccess
 	case wire.FSCTLQueryNetworkInterfaceInfo:
@@ -142,10 +142,13 @@ func (c *conn) handleIoctl(ctx context.Context, msg []byte, tr *tree) uint32 {
 	}
 }
 
-func buildValidateNegotiateInfo(dialect uint16, guid [16]byte) []byte {
+// buildValidateNegotiateInfo echoes the capabilities, GUID, security mode,
+// and dialect from this connection's NEGOTIATE response, which is what the
+// client validates against.
+func buildValidateNegotiateInfo(dialect uint16, caps uint32, guid [16]byte) []byte {
 	out := make([]byte, 24)
 	for i := range 4 {
-		out[i] = byte(wire.CapLargeMTU >> (8 * i))
+		out[i] = byte(caps >> (8 * i))
 	}
 	copy(out[4:20], guid[:])
 	out[20] = byte(wire.SigningEnabled)

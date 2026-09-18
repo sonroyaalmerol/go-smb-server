@@ -42,8 +42,8 @@ type CreateRequest struct {
 }
 
 func (r *CreateRequest) Parse(msg []byte) error {
-	if len(msg) < createBody+57 {
-		return fmt.Errorf("wire: create needs %d bytes, got %d", createBody+57, len(msg))
+	if len(msg) < createBody+56 {
+		return fmt.Errorf("wire: create needs %d bytes, got %d", createBody+56, len(msg))
 	}
 	if ss := binary.LittleEndian.Uint16(msg[createBody : createBody+2]); ss != 57 {
 		return fmt.Errorf("wire: create StructureSize = %d, want 57", ss)
@@ -153,8 +153,8 @@ type ReadRequest struct {
 }
 
 func (r *ReadRequest) Parse(msg []byte) error {
-	if len(msg) < createBody+49 {
-		return fmt.Errorf("wire: read needs %d bytes", createBody+49)
+	if len(msg) < createBody+48 {
+		return fmt.Errorf("wire: read needs %d bytes", createBody+48)
 	}
 	b := msg[createBody:]
 	if ss := binary.LittleEndian.Uint16(b[0:2]); ss != 49 {
@@ -173,7 +173,7 @@ func ReadResponseAppend(dst []byte, data []byte) []byte {
 	out = append(out, data...)
 	b := out[start : start+fixed]
 	put16(b[0:2], 17)
-	put16(b[2:4], uint16(start+fixed))
+	put16(b[2:4], HeaderSize+fixed)
 	put32(b[4:8], uint32(len(data)))
 	put32(b[8:12], 0)
 	put32(b[12:16], 0)
@@ -186,7 +186,7 @@ func ReadResponseAlloc(dst []byte, length int) []byte {
 	out := append(dst, make([]byte, fixed+length)...)
 	b := out[start : start+fixed]
 	put16(b[0:2], 17)
-	put16(b[2:4], uint16(start+fixed))
+	put16(b[2:4], HeaderSize+fixed)
 	put32(b[4:8], uint32(length))
 	put32(b[8:12], 0)
 	put32(b[12:16], 0)
@@ -210,8 +210,8 @@ type WriteRequest struct {
 }
 
 func (r *WriteRequest) Parse(msg []byte) error {
-	if len(msg) < createBody+49 {
-		return fmt.Errorf("wire: write needs %d bytes", createBody+49)
+	if len(msg) < createBody+48 {
+		return fmt.Errorf("wire: write needs %d bytes", createBody+48)
 	}
 	b := msg[createBody:]
 	if ss := binary.LittleEndian.Uint16(b[0:2]); ss != 49 {
@@ -248,8 +248,8 @@ type QueryDirectoryRequest struct {
 }
 
 func (r *QueryDirectoryRequest) Parse(msg []byte) error {
-	if len(msg) < createBody+33 {
-		return fmt.Errorf("wire: query_directory needs %d bytes", createBody+33)
+	if len(msg) < createBody+32 {
+		return fmt.Errorf("wire: query_directory needs %d bytes", createBody+32)
 	}
 	b := msg[createBody:]
 	if ss := binary.LittleEndian.Uint16(b[0:2]); ss != 33 {
@@ -286,10 +286,21 @@ const (
 // FileInfoClass values for queries (MS-FSCC section 2.4). Only the classes we
 // implement are listed.
 const (
-	FileBasicInfoClass         uint8 = 0x04
-	FileStandardInfoClass      uint8 = 0x05
-	FileAllInformation         uint8 = 0x12
-	FileNetworkOpenInformation uint8 = 0x22
+	FileBasicInfoClass          uint8 = 0x04
+	FileStandardInfoClass       uint8 = 0x05
+	FileInternalInformation     uint8 = 0x06
+	FileEaInformation           uint8 = 0x07
+	FileNameInformation         uint8 = 0x09
+	FilePositionInformation     uint8 = 0x0E
+	FileModeInformation         uint8 = 0x10
+	FileAllInformation          uint8 = 0x12
+	FileAllocationInformation   uint8 = 0x13
+	FileStreamInformation       uint8 = 0x16
+	FileNetworkOpenInformation  uint8 = 0x22
+	FileAttributeTagInformation uint8 = 0x23
+	// FileNormalizedNameInformation is what Windows asks for to learn a
+	// file's canonical name.
+	FileNormalizedNameInformation uint8 = 0x30
 )
 
 // FileInfoClass values for sets (MS-FSCC section 2.4).
@@ -320,9 +331,12 @@ type QueryInfoRequest struct {
 }
 
 // Parse populates the request. msg is the full SMB2 message.
+// Parse populates the request. The minimum length is StructureSize - 1: SMB2
+// counts one byte of the variable part in StructureSize, so a request whose
+// variable part is empty is one byte shorter than that.
 func (r *QueryInfoRequest) Parse(msg []byte) error {
-	if len(msg) < createBody+41 {
-		return fmt.Errorf("wire: query_info needs %d bytes", createBody+41)
+	if len(msg) < createBody+40 {
+		return fmt.Errorf("wire: query_info needs %d bytes", createBody+40)
 	}
 	b := msg[createBody:]
 	if ss := binary.LittleEndian.Uint16(b[0:2]); ss != 41 {
@@ -347,8 +361,8 @@ type SetInfoRequest struct {
 
 // Parse populates the request. msg is the full SMB2 message.
 func (r *SetInfoRequest) Parse(msg []byte) error {
-	if len(msg) < createBody+33 {
-		return fmt.Errorf("wire: set_info needs %d bytes", createBody+33)
+	if len(msg) < createBody+32 {
+		return fmt.Errorf("wire: set_info needs %d bytes", createBody+32)
 	}
 	b := msg[createBody:]
 	if ss := binary.LittleEndian.Uint16(b[0:2]); ss != 33 {
@@ -374,8 +388,8 @@ func QueryInfoResponseAppend(dst []byte, info []byte) []byte {
 	out := append(dst, make([]byte, fixed)...)
 	out = append(out, info...)
 	b := out[start : start+fixed]
-	put16(b[0:2], 9)                   // StructureSize
-	put16(b[2:4], uint16(start+fixed)) // OutputBufferOffset (from header)
+	put16(b[0:2], 9)                // StructureSize
+	put16(b[2:4], HeaderSize+fixed) // OutputBufferOffset, from this message's header
 	put32(b[4:8], uint32(len(info)))
 	return out
 }
@@ -446,12 +460,30 @@ func (f *FileStandardInformation) Append(dst []byte) []byte {
 	return out
 }
 
-// FileAllInformationAppend writes a minimal FileAllInformation (Basic +
-// Standard + empty Access/Mode/Position/EA) suitable for common clients.
-func FileAllInformationAppend(dst []byte, basic FileBasicInformation, standard FileStandardInformation) []byte {
+// FileAllInformationAppend writes a full FILE_ALL_INFORMATION (MS-FSCC
+// section 2.4.2): basic, standard, internal, EA, access, position, mode,
+// alignment, and name. The Linux client rejects a short one, which makes
+// mounting fail with "get root inode failed".
+func FileAllInformationAppend(dst []byte, basic FileBasicInformation, standard FileStandardInformation, indexNumber uint64, name string) []byte {
 	out := basic.Append(dst)
 	out = standard.Append(out)
-	out = append(out, make([]byte, 4+4+8+4)...)
+
+	start := len(out)
+	out = append(out, make([]byte, 32)...)
+	b := out[start:]
+	put64(b[0:8], indexNumber)  // InternalInformation.IndexNumber
+	put32(b[8:12], 0)           // EaInformation.EaSize
+	put32(b[12:16], 0x001F01FF) // AccessInformation.AccessFlags
+	put64(b[16:24], 0)          // PositionInformation.CurrentByteOffset
+	put32(b[24:28], 0)          // ModeInformation.Mode
+	put32(b[28:32], 0)          // AlignmentInformation.AlignmentRequirement
+
+	encoded := UTF16ToBytes(name)
+	start = len(out)
+	out = append(out, make([]byte, 4+len(encoded))...)
+	b = out[start:]
+	put32(b[0:4], uint32(len(encoded))) // NameInformation.FileNameLength
+	copy(b[4:], encoded)
 	return out
 }
 
@@ -519,8 +551,8 @@ type IoctlRequest struct {
 
 // Parse populates the request. msg is the full SMB2 message.
 func (r *IoctlRequest) Parse(msg []byte) error {
-	if len(msg) < createBody+57 {
-		return fmt.Errorf("wire: ioctl needs %d bytes", createBody+57)
+	if len(msg) < createBody+56 {
+		return fmt.Errorf("wire: ioctl needs %d bytes", createBody+56)
 	}
 	b := msg[createBody:]
 	if ss := binary.LittleEndian.Uint16(b[0:2]); ss != 57 {

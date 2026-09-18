@@ -6,13 +6,18 @@ import (
 	"encoding/asn1"
 	"errors"
 	"fmt"
+	"sync"
 )
 
 var ntlmOID = asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 311, 2, 2, 10}
 
-func unwrapSPNEGOToken(token []byte) ([]byte, error) {
+// unwrapSPNEGOToken returns the NTLMSSP message inside token, and whether it
+// arrived wrapped in SPNEGO. Callers must answer in the framing they were
+// given: the Linux kernel SMB client sends raw NTLMSSP and rejects an
+// SPNEGO-wrapped challenge ("blob signature incorrect").
+func unwrapSPNEGOToken(token []byte) ([]byte, bool, error) {
 	if isNTLMSSP(token) {
-		return token, nil
+		return token, false, nil
 	}
 	if len(token) > 0 && token[0] == 0x60 {
 		clone := append([]byte{0x30}, token[1:]...)
@@ -23,15 +28,15 @@ func unwrapSPNEGOToken(token []byte) ([]byte, error) {
 		}
 		if _, err := asn1.Unmarshal(clone, &ict); err == nil {
 			if m := scanForMechToken(ict.Init.Bytes); m != nil {
-				return m, nil
+				return m, true, nil
 			}
 			if m := scanForRespToken(ict.Resp.Bytes); m != nil {
-				return m, nil
+				return m, true, nil
 			}
 		}
 	}
 	if ntlm, ok := findContextTag2(token); ok && isNTLMSSP(ntlm) {
-		return ntlm, nil
+		return ntlm, true, nil
 	}
 	if len(token) > 0 && token[0] == 0xA1 {
 		var outer struct {
@@ -43,10 +48,10 @@ func unwrapSPNEGOToken(token []byte) ([]byte, error) {
 		}
 		clone := append([]byte{0x30}, token[1:]...)
 		if _, err := asn1.Unmarshal(clone, &outer); err == nil && len(outer.Inner.ResponseToken) > 0 && isNTLMSSP(outer.Inner.ResponseToken) {
-			return outer.Inner.ResponseToken, nil
+			return outer.Inner.ResponseToken, true, nil
 		}
 	}
-	return nil, fmt.Errorf("spnego: could not locate NTLMSSP token")
+	return nil, false, fmt.Errorf("spnego: could not locate NTLMSSP token")
 }
 
 func scanForMechToken(negTokenInit []byte) []byte {
@@ -116,6 +121,28 @@ func parseContextTag(b []byte) ([]byte, error) {
 	}
 	return b[idx : idx+length], nil
 }
+
+var spnegoOID = asn1.ObjectIdentifier{1, 3, 6, 1, 5, 5, 2}
+
+// NegTokenInitNTLM returns the SPNEGO token a server puts in its NEGOTIATE
+// response to advertise NTLM. Windows needs this advertisement: with an
+// empty blob its SSPI picks a mechanism on its own and then fails the
+// session setup with STATUS_INVALID_PARAMETER.
+var NegTokenInitNTLM = sync.OnceValue(func() []byte {
+	init := struct {
+		MechTypes []asn1.ObjectIdentifier `asn1:"explicit,tag:0"`
+	}{[]asn1.ObjectIdentifier{ntlmOID}}
+	initBytes, err := asn1.Marshal(init)
+	if err != nil {
+		return nil
+	}
+	oidBytes, err := asn1.Marshal(spnegoOID)
+	if err != nil {
+		return nil
+	}
+	inner := append(oidBytes, wrapDER(0xA0, initBytes)...)
+	return wrapDER(0x60, inner)
+})
 
 func wrapSPNEGOChallenge(challenge []byte) ([]byte, error) {
 	return wrapNegTokenResp(1, challenge)

@@ -8,6 +8,7 @@ import (
 
 	"github.com/sonroyaalmerol/go-smb-server/smb/auth"
 	"github.com/sonroyaalmerol/go-smb-server/smb/encryption"
+	"github.com/sonroyaalmerol/go-smb-server/smb/ntlmssp"
 	"github.com/sonroyaalmerol/go-smb-server/smb/signing"
 	"github.com/sonroyaalmerol/go-smb-server/smb/vfs"
 	"github.com/sonroyaalmerol/go-smb-server/smb/wire"
@@ -106,14 +107,19 @@ func (c *conn) handleNegotiate(msg []byte, hdr *wire.Header) uint32 {
 		return c.errBody(wire.StatusNotSupported)
 	}
 
+	caps := c.negotiateCapabilities()
+	c.negDialect = dialect
+	c.negCaps = caps
+
 	resp := wire.NegotiateResponse{
 		SecurityMode:    wire.SigningEnabled,
 		DialectRevision: dialect,
 		ServerGuid:      c.srv.guid,
-		Capabilities:    c.negotiateCapabilities(),
+		Capabilities:    caps,
 		MaxTransactSize: c.srv.maxTransact,
 		MaxReadSize:     c.srv.maxRead,
 		MaxWriteSize:    c.srv.maxWrite,
+		SecurityBuffer:  ntlmssp.NegTokenInitNTLM(),
 	}
 	if c.srv.requireEnc && dialect >= wire.DialectSMB30 {
 		resp.Contexts = append(resp.Contexts, wire.NegotiateContext{
@@ -332,11 +338,28 @@ func (c *conn) handleCreate(ctx context.Context, msg []byte, hdr *wire.Header, t
 	return wire.StatusSuccess
 }
 
+// DOS attribute bits (MS-FSCC section 2.6).
+const (
+	attrReadOnly  uint32 = 0x00000001
+	attrHidden    uint32 = 0x00000002
+	attrSystem    uint32 = 0x00000004
+	attrDirectory uint32 = 0x00000010
+	attrArchive   uint32 = 0x00000020
+	attrNormal    uint32 = 0x00000080
+)
+
+// toFileAttributes reports the backend's attributes, with the directory bit
+// forced to match the entry itself. A file with no attributes is reported as
+// FILE_ATTRIBUTE_NORMAL, which clients require.
 func toFileAttributes(fi vfs.FileInfo) uint32 {
+	attrs := fi.Attributes & (attrReadOnly | attrHidden | attrSystem | attrArchive)
 	if fi.IsDir {
-		return 0x10
+		return attrs | attrDirectory
 	}
-	return 0x20
+	if attrs == 0 {
+		return attrNormal
+	}
+	return attrs
 }
 
 func (c *conn) handleClose(ctx context.Context, msg []byte, tr *tree) uint32 {
@@ -444,12 +467,13 @@ func (c *conn) handleQueryDirectory(ctx context.Context, msg []byte, tr *tree) u
 		pattern = "*"
 	}
 
-	useFileIdBothDir := req.FileInformationClass == wire.FileIdBothDirectoryInformation
-	entryMinSize := wire.FileDirInfoMinSize
-	encoder := wire.AppendFileDirInfo
-	if useFileIdBothDir {
-		entryMinSize = wire.FileIdBothDirInfoMinSize
-		encoder = wire.AppendFileIdBothDirInfo
+	// Encode the class the client asked for: each has a different fixed part
+	// before the name, so answering in the wrong one gives clients garbled
+	// names ("directory entry name would overflow", on Linux).
+	infoClass := req.FileInformationClass
+	entryMinSize, ok := wire.DirInfoFixedSize(infoClass)
+	if !ok {
+		return c.errBody(wire.StatusInvalidInfoClass)
 	}
 
 	const bodyFixed = 8
@@ -471,7 +495,10 @@ func (c *conn) handleQueryDirectory(ctx context.Context, msg []byte, tr *tree) u
 			break
 		}
 		encFi := wire.FileInfo{
-			Name:           fi.Name,
+			Name:   fi.Name,
+			FileId: pathIndexNumber(oh.path + "/" + fi.Name),
+			// (pathIndexNumber normalizes separators, so this matches the
+			// index a QUERY_INFO on the same file reports.)
 			EndOfFile:      uint64(fi.Size),
 			AllocationSize: uint64(fi.Size),
 			FileAttributes: toFileAttributes(fi),
@@ -481,7 +508,7 @@ func (c *conn) handleQueryDirectory(ctx context.Context, msg []byte, tr *tree) u
 			ChangeTime:     wire.TimeToFiletime(fi.ChangeTime),
 		}
 		var entryStart int
-		c.out, entryStart = encoder(c.out, encFi)
+		c.out, entryStart = wire.AppendDirInfo(c.out, encFi, infoClass)
 		if prevEntryStart >= 0 {
 			wire.SetNextEntryOffset(c.out, prevEntryStart, entryStart)
 		}
@@ -496,7 +523,9 @@ func (c *conn) handleQueryDirectory(ctx context.Context, msg []byte, tr *tree) u
 
 	bufLen := len(c.out) - bufStart
 	binary.LittleEndian.PutUint16(c.out[bodyStart:bodyStart+2], 9)
-	binary.LittleEndian.PutUint16(c.out[bodyStart+2:bodyStart+4], uint16(bufStart))
+	// OutputBufferOffset is relative to this message's header, which is 64
+	// bytes before the body, plus the 8-byte fixed part.
+	binary.LittleEndian.PutUint16(c.out[bodyStart+2:bodyStart+4], wire.HeaderSize+8)
 	binary.LittleEndian.PutUint32(c.out[bodyStart+4:bodyStart+8], uint32(bufLen))
 	oh.enumDone = true
 	return wire.StatusSuccess
