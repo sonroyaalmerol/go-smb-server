@@ -508,6 +508,25 @@ func (c *request) handleMessage(ctx context.Context, msg []byte) {
 	lastStatus := uint32(wire.StatusSuccess)
 	var lastFileId [16]byte
 	prevRespStart := -1
+	// Responses are signed once the whole chain is built: appending the next
+	// response pads the previous one and sets its NextCommand, and the
+	// signature has to cover both (MS-SMB2 3.3.4.1.1).
+	type unsigned struct {
+		start  int
+		signer *signing.Signer
+	}
+	var toSign []unsigned
+	defer func() {
+		for i, u := range toSign {
+			end := len(c.out)
+			if i+1 < len(toSign) {
+				end = toSign[i+1].start
+			}
+			if err := u.signer.Sign(c.out[u.start:end]); err != nil {
+				c.log.Debug("sign response failed", "err", err)
+			}
+		}
+	}()
 
 	for off+wire.HeaderSize <= len(msg) {
 		sub := msg[off:]
@@ -583,12 +602,8 @@ func (c *request) handleMessage(ctx context.Context, msg []byte) {
 			chainFailed = true
 		}
 
-		grant := c.grantCredits()
-		if grant > 0xFFFF {
-			hdr.Credit = 0xFFFF
-		} else {
-			hdr.Credit = uint16(grant)
-		}
+		// hdr.Credit still holds what the client asked for.
+		hdr.Credit = c.grantCredits(hdr.Credit)
 
 		hdr.Flags |= wire.FlagServerToRedir
 		if !first {
@@ -605,12 +620,9 @@ func (c *request) handleMessage(ctx context.Context, msg []byte) {
 		if sess := c.getSession(hdr.SessionId); sess != nil && sess.signer != nil {
 			encrypting := sess.requireEncrypt && hdr.Command != wire.CmdNegotiate && hdr.Command != wire.CmdSessionSetup
 			if !encrypting {
-				subResp := c.out[respStart:]
 				hdr.Flags |= wire.FlagSigned
-				binary.LittleEndian.PutUint32(subResp[16:20], hdr.Flags)
-				if err := sess.signer.Sign(subResp); err != nil {
-					c.log.Debug("sign response failed", "err", err)
-				}
+				binary.LittleEndian.PutUint32(c.out[respStart+16:respStart+20], hdr.Flags)
+				toSign = append(toSign, unsigned{start: respStart, signer: sess.signer})
 			}
 		}
 
@@ -643,8 +655,10 @@ func fileIdOffset(cmd uint16) int {
 	}
 }
 
-// chargeCredits deducts what a request costs, never below zero.
+// chargeCredits deducts what a request costs, never below zero. Every request
+// uses at least one credit, including those with a CreditCharge of zero.
 func (c *conn) chargeCredits(charge uint32) {
+	charge = max(charge, 1)
 	c.creditMu.Lock()
 	defer c.creditMu.Unlock()
 	if c.creditBalance >= charge {
@@ -654,14 +668,25 @@ func (c *conn) chargeCredits(charge uint32) {
 	c.creditBalance = 0
 }
 
-// grantCredits tops the client back up to the server's maximum and reports
-// how many credits that took.
-func (c *conn) grantCredits() uint32 {
+// grantCredits grants the credits a client requested, as far as the
+// server's maximum allows, and at least one while the client has none left.
+//
+// Granting only what was asked matters: topping the client up to the maximum
+// in the NEGOTIATE response, which macOS does not count, left it believing it
+// had a single credit, so it stalled before every compound request and
+// eventually hung.
+func (c *conn) grantCredits(requested uint16) uint16 {
 	c.creditMu.Lock()
 	defer c.creditMu.Unlock()
-	grant := c.srv.maxCredits - c.creditBalance
+	grant := uint32(requested)
+	if room := c.srv.maxCredits - min(c.creditBalance, c.srv.maxCredits); grant > room {
+		grant = room
+	}
+	if grant == 0 && c.creditBalance == 0 {
+		grant = 1
+	}
 	c.creditBalance += grant
-	return grant
+	return uint16(grant)
 }
 
 func (c *conn) getSession(id uint64) *session {

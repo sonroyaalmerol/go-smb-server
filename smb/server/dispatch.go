@@ -220,7 +220,7 @@ func (c *request) handleTreeConnect(msg []byte, hdr *wire.Header, sess *session)
 		return c.errBody(wire.StatusInvalidParameter)
 	}
 	shareName := parseShareName(wire.UTF16FromBytes(req.Path))
-	sh, ok := c.srv.shareByName[shareName]
+	sh, ok := c.srv.shareNamed(shareName)
 	if !ok {
 		return c.errBody(wire.StatusBadNetworkName)
 	}
@@ -241,6 +241,20 @@ func (c *request) handleTreeConnect(msg []byte, hdr *wire.Header, sess *session)
 	}
 	c.out = resp.Append(c.out)
 	return wire.StatusSuccess
+}
+
+// shareNamed finds a share by name. Share names are case-insensitive, as on
+// Windows: macOS clients send them upper-cased.
+func (s *Server) shareNamed(name string) (vfs.Share, bool) {
+	if sh, ok := s.shareByName[name]; ok {
+		return sh, true
+	}
+	for n, sh := range s.shareByName {
+		if strings.EqualFold(n, name) {
+			return sh, true
+		}
+	}
+	return nil, false
 }
 
 func parseShareName(unc string) string {
@@ -487,6 +501,13 @@ func (c *request) handleQueryDirectory(ctx context.Context, msg []byte, tr *tree
 			oh.enumEntries = append(oh.enumEntries, fi)
 		}
 		oh.enumStarted = true
+		if len(oh.enumEntries) == 0 {
+			// Nothing matched at all, which is a different answer from having
+			// returned every match (MS-FSA 2.1.5.6.3). macOS looks names up
+			// this way and expects STATUS_NO_SUCH_FILE for a missing one.
+			oh.enumDone = true
+			return c.errBody(wire.StatusNoSuchFile)
+		}
 	}
 	if oh.enumIndex >= len(oh.enumEntries) {
 		oh.enumDone = true
