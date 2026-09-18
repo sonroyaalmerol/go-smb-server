@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/sha512"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/sonroyaalmerol/go-smb-server/smb/auth"
 	"github.com/sonroyaalmerol/go-smb-server/smb/encryption"
+	"github.com/sonroyaalmerol/go-smb-server/smb/ntlmssp"
 	"github.com/sonroyaalmerol/go-smb-server/smb/signing"
 	"github.com/sonroyaalmerol/go-smb-server/smb/transport"
 	"github.com/sonroyaalmerol/go-smb-server/smb/vfs"
@@ -186,6 +188,14 @@ type openHandle struct {
 	deletePending bool
 	enumDone      bool
 	enumMu        sync.Mutex
+
+	// Directory enumeration is paged: clients ask repeatedly, sometimes one
+	// entry at a time, until the server reports no more files. The entries
+	// are captured on the first call so later calls continue where the
+	// previous one stopped.
+	enumStarted bool
+	enumEntries []vfs.FileInfo
+	enumIndex   int
 }
 
 type conn struct {
@@ -205,6 +215,12 @@ type conn struct {
 	connDone     chan struct{}
 
 	preauthHash []byte
+
+	// negDialect and negCaps are what NEGOTIATE actually answered on this
+	// connection. FSCTL_VALIDATE_NEGOTIATE_INFO must echo them exactly:
+	// clients compare the two and drop the connection when they differ.
+	negDialect uint16
+	negCaps    uint32
 }
 
 func (s *Server) serveConn(ctx context.Context, c net.Conn) {
@@ -248,6 +264,19 @@ func (s *Server) serveConn(ctx context.Context, c net.Conn) {
 		}
 		_ = cn.fc.Underlying().SetReadDeadline(time.Time{})
 
+		if isSMB1Negotiate(msg) {
+			// Windows opens with an SMB1 multi-protocol negotiate listing
+			// "SMB 2.???". Answering with the wildcard dialect makes it
+			// retry in SMB2; ignoring it makes the client hang, then reset.
+			cn.out = cn.out[:0]
+			cn.replyWildcardNegotiate()
+			if err := cn.fc.WriteMessage(cn.out); err != nil {
+				cn.log.Debug("write error", "err", err)
+				return
+			}
+			continue
+		}
+
 		if len(msg) >= 4 && msg[0] == 0xFD {
 			dec, dErr := cn.openTransform(msg)
 			if dErr != nil {
@@ -255,7 +284,7 @@ func (s *Server) serveConn(ctx context.Context, c net.Conn) {
 				return
 			}
 			msg = dec
-		} else if len(msg) >= wire.HeaderSize {
+		} else if len(msg) >= wire.HeaderSize && msg[0] == wire.SMB2ProtocolId[0] {
 			sessID := binary.LittleEndian.Uint64(msg[40:48])
 			if sess := cn.getSession(sessID); sess != nil && sess.requireEncrypt {
 				cn.log.Debug("plaintext on encrypted session, dropping")
@@ -264,7 +293,7 @@ func (s *Server) serveConn(ctx context.Context, c net.Conn) {
 		}
 
 		cn.out = cn.out[:0]
-		cmdBefore := uint16(0)
+		cmdBefore := uint16(0xFFFF)
 		if len(msg) >= wire.HeaderSize {
 			cmdBefore = binary.LittleEndian.Uint16(msg[12:14])
 		}
@@ -282,6 +311,36 @@ func (s *Server) serveConn(ctx context.Context, c net.Conn) {
 			}
 		}
 	}
+}
+
+// smb1NegotiateHeader is the start of an SMB1 NEGOTIATE request: the SMB1
+// protocol id followed by command 0x72.
+var smb1NegotiateHeader = []byte{0xFF, 'S', 'M', 'B', 0x72}
+
+// isSMB1Negotiate reports whether msg is an SMB1 negotiate offering SMB2.
+func isSMB1Negotiate(msg []byte) bool {
+	return bytes.HasPrefix(msg, smb1NegotiateHeader) && bytes.Contains(msg, []byte("SMB 2."))
+}
+
+// replyWildcardNegotiate answers an SMB1 negotiate with an SMB2 negotiate
+// response carrying the wildcard dialect, so the client renegotiates in
+// SMB2 (MS-SMB2 section 3.3.5.3.1).
+func (c *conn) replyWildcardNegotiate() {
+	hdr := wire.NewHeader(wire.CmdNegotiate)
+	hdr.Flags = wire.FlagServerToRedir
+	hdr.Credit = 1
+	c.out = hdr.Append(c.out)
+	resp := wire.NegotiateResponse{
+		SecurityMode:    wire.SigningEnabled,
+		DialectRevision: wire.DialectWildcard,
+		ServerGuid:      c.srv.guid,
+		Capabilities:    c.negotiateCapabilities(),
+		MaxTransactSize: c.srv.maxTransact,
+		MaxReadSize:     c.srv.maxRead,
+		MaxWriteSize:    c.srv.maxWrite,
+		SecurityBuffer:  ntlmssp.NegTokenInitNTLM(),
+	}
+	c.out = resp.Append(c.out)
 }
 
 func (c *conn) drainAsync() {
@@ -426,12 +485,21 @@ func (c *conn) handleMessage(ctx context.Context, msg []byte) {
 	}
 }
 
+// fileIdOffset returns where the FileId sits in a request, so a related
+// compound command can inherit the previous command's handle. The offsets
+// are the request layouts in MS-SMB2 section 2.2; getting one wrong makes
+// the server answer the chained command with STATUS_FILE_CLOSED.
 func fileIdOffset(cmd uint16) int {
 	switch cmd {
-	case wire.CmdClose, wire.CmdFlush, wire.CmdQueryDirectory, wire.CmdQueryInfo, wire.CmdSetInfo:
+	case wire.CmdClose, wire.CmdFlush, wire.CmdQueryDirectory, wire.CmdLock, wire.CmdIoctl:
+		// StructureSize plus 6 bytes of fixed fields.
 		return 64 + 8
-	case wire.CmdRead, wire.CmdWrite, wire.CmdLock, wire.CmdIoctl:
+	case wire.CmdRead, wire.CmdWrite, wire.CmdSetInfo:
+		// Read/Write: length and offset first. SetInfo: buffer fields first.
 		return 64 + 16
+	case wire.CmdQueryInfo:
+		// Info class, buffer lengths, additional information, and flags.
+		return 64 + 24
 	default:
 		return -1
 	}
