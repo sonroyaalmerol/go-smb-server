@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 
+	"github.com/sonroyaalmerol/go-smb-server/smb/vfs"
 	"github.com/sonroyaalmerol/go-smb-server/smb/wire"
 )
 
@@ -24,6 +25,8 @@ func osErrToStatus(err error) uint32 {
 		return wire.StatusInvalidHandle
 	case errors.Is(err, io.EOF):
 		return wire.StatusEndOfFile
+	case errors.Is(err, vfs.ErrSharingViolation):
+		return wire.StatusSharingViolation
 	}
 	return wire.StatusAccessDenied
 }

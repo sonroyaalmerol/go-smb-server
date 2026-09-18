@@ -3,8 +3,11 @@ package ntlmssp
 import (
 	"context"
 	"crypto/rand"
+	"encoding/binary"
 	"errors"
 	"fmt"
+	"strings"
+	"time"
 
 	"github.com/sonroyaalmerol/go-smb-server/smb/auth"
 )
@@ -25,6 +28,10 @@ type serverAuthenticator struct {
 
 	domain string
 	user   string
+
+	// spnego records whether the client wrapped its token in SPNEGO, so
+	// replies use the same framing.
+	spnego bool
 }
 
 func NewServer(lookup CredentialLookup, serverName string) auth.Factory {
@@ -34,10 +41,11 @@ func NewServer(lookup CredentialLookup, serverName string) auth.Factory {
 }
 
 func (s *serverAuthenticator) Accept(ctx context.Context, token []byte) (auth.AcceptResult, error) {
-	msg, err := unwrapSPNEGOToken(token)
+	msg, spnego, err := unwrapSPNEGOToken(token)
 	if err != nil {
 		return auth.AcceptResult{}, fmt.Errorf("ntlmssp: unwrap spnego: %w", err)
 	}
+	s.spnego = spnego
 
 	switch s.stage {
 	case 0:
@@ -68,6 +76,9 @@ func (s *serverAuthenticator) handleNegotiate(msg []byte) (auth.AcceptResult, er
 	body, err := resp.Marshal()
 	if err != nil {
 		return auth.AcceptResult{}, err
+	}
+	if !s.spnego {
+		return auth.AcceptResult{OutputToken: body}, nil
 	}
 	out, err := wrapSPNEGOChallenge(body)
 	if err != nil {
@@ -108,6 +119,10 @@ func (s *serverAuthenticator) handleAuthenticate(ctx context.Context, msg []byte
 		Username: s.user,
 		Domain:   s.domain,
 	}
+	if !s.spnego {
+		// Raw NTLMSSP ends with an empty security buffer.
+		return auth.AcceptResult{Identity: ident, SessionKey: sessionKey}, nil
+	}
 	acceptToken, err := wrapSPNEGOAccept()
 	if err != nil {
 		return auth.AcceptResult{}, fmt.Errorf("ntlmssp: wrap accept: %w", err)
@@ -127,17 +142,31 @@ const (
 
 // buildTargetInfo constructs the CHALLENGE_MESSAGE TargetInfo payload: a list
 // of AV_PAIRs the client folds into its NTLMv2 response, terminated by
-// MsvAvEOL. We include the server (NetBIOS computer) name so the client can
-// compute a conformant response.
+// MsvAvEOL. It carries the same pairs Samba sends, including the timestamp
+// Windows expects; a sparser list is rejected by Windows clients.
 func buildTargetInfo(serverName string) []byte {
 	if serverName == "" {
 		// Minimal valid TargetInfo: just the terminator.
 		return []byte{0x00, 0x00, 0x00, 0x00}
 	}
 	name := []byte(toUTF16LE(serverName))
+	dnsName := []byte(toUTF16LE(strings.ToLower(serverName)))
 	var out []byte
+	out = appendAV(out, avNbDomName, name)
 	out = appendAV(out, avNbCompName, name)
+	out = appendAV(out, avDnsDom, nil)
+	out = appendAV(out, avDnsComp, dnsName)
+	out = appendAV(out, avTimestamp, nowFiletime())
 	out = appendAV(out, avEOL, nil)
+	return out
+}
+
+// nowFiletime returns the current time as a Windows FILETIME: 100-nanosecond
+// intervals since 1601-01-01.
+func nowFiletime() []byte {
+	const unixEpochFiletime = 116_444_736_000_000_000
+	out := make([]byte, 8)
+	binary.LittleEndian.PutUint64(out, uint64(time.Now().UnixNano()/100)+unixEpochFiletime)
 	return out
 }
 
