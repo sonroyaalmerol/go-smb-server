@@ -113,6 +113,12 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("server: listen %s: %w", s.addr, err)
 	}
+	return s.Serve(ctx, ln)
+}
+
+// Serve accepts connections on ln until ctx is cancelled, then waits for
+// open connections to finish. It closes ln when it returns.
+func (s *Server) Serve(ctx context.Context, ln net.Listener) error {
 	s.mu.Lock()
 	s.listener = ln
 	s.mu.Unlock()
