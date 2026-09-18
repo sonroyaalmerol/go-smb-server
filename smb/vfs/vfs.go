@@ -2,6 +2,7 @@ package vfs
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io/fs"
 	"iter"
@@ -42,7 +43,21 @@ type OpenOptions struct {
 	Disposition uint32
 	CreateDir   bool
 	Append      bool
+	// DesiredAccess is what the client asked to do with the file, and
+	// ShareAccess what it permits other opens to do meanwhile (MS-SMB2
+	// section 2.2.13). A backend that tracks open files enforces share
+	// modes with them and answers ErrSharingViolation.
+	DesiredAccess uint32
+	ShareAccess   uint32
+	// DeleteOnClose is set when the open asked for the file to be deleted
+	// once every handle to it is closed.
+	DeleteOnClose bool
 }
+
+// ErrSharingViolation reports that an open conflicts with an existing open of
+// the same file: the share modes do not permit both. Backends return it from
+// Open, and it reaches the client as STATUS_SHARING_VIOLATION.
+var ErrSharingViolation = errors.New("vfs: sharing violation")
 
 type FileInfo struct {
 	Name         string

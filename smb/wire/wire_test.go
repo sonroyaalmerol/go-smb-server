@@ -2,6 +2,7 @@ package wire
 
 import (
 	"bytes"
+	"encoding/binary"
 	"testing"
 	"time"
 )
@@ -167,5 +168,83 @@ func TestCreateRequestParse(t *testing.T) {
 	}
 	if UTF16FromBytes(req.Name) != "dir/file.txt" {
 		t.Fatalf("name = %q", UTF16FromBytes(req.Name))
+	}
+}
+
+// Each directory information class puts the name after a different fixed
+// part; a client that asked for one class cannot read another's layout.
+func TestAppendDirInfoPlacesNamePerClass(t *testing.T) {
+	const name = "quarterly report.txt"
+	classes := []struct {
+		class uint8
+		fixed int
+	}{
+		{FileDirectoryInformation, 64},
+		{FileFullDirectoryInformation, 68},
+		{FileIdFullDirectoryInformation, 80},
+		{FileBothDirectoryInformation, 94},
+		{FileIdBothDirectoryInformation, 104},
+		{FileNamesInformation, 12},
+	}
+	for _, tt := range classes {
+		if got, ok := DirInfoFixedSize(tt.class); !ok || got != tt.fixed {
+			t.Errorf("DirInfoFixedSize(%#x) = %d, %v; want %d, true", tt.class, got, ok, tt.fixed)
+			continue
+		}
+		out, start := AppendDirInfo(nil, FileInfo{Name: name, FileId: 42}, tt.class)
+		if start != 0 {
+			t.Errorf("class %#x: entry starts at %d, want 0", tt.class, start)
+			continue
+		}
+		encoded := UTF16ToBytes(name)
+		lengthOffset := 60
+		if tt.class == FileNamesInformation {
+			lengthOffset = 8
+		}
+		if got := binary.LittleEndian.Uint32(out[lengthOffset : lengthOffset+4]); int(got) != len(encoded) {
+			t.Errorf("class %#x: FileNameLength = %d, want %d", tt.class, got, len(encoded))
+		}
+		if got := string(out[tt.fixed : tt.fixed+len(encoded)]); got != string(encoded) {
+			t.Errorf("class %#x: name not at offset %d", tt.class, tt.fixed)
+		}
+		if len(out)%8 != 0 {
+			t.Errorf("class %#x: entry length %d is not 8-byte aligned", tt.class, len(out))
+		}
+	}
+	if _, start := AppendDirInfo(nil, FileInfo{Name: name}, 0x7F); start != -1 {
+		t.Error("an unsupported class should be refused")
+	}
+}
+
+// A request whose variable part is empty is one byte shorter than its
+// StructureSize, and must still parse.
+func TestParseAcceptsRequestsWithEmptyVariablePart(t *testing.T) {
+	message := func(structureSize, fixed int, fill func(b []byte)) []byte {
+		msg := make([]byte, HeaderSize+fixed)
+		binary.LittleEndian.PutUint16(msg[HeaderSize:HeaderSize+2], uint16(structureSize))
+		fill(msg[HeaderSize:])
+		return msg
+	}
+
+	var query QueryInfoRequest
+	if err := query.Parse(message(41, 40, func(b []byte) { b[2], b[3] = 1, 0x06 })); err != nil {
+		t.Errorf("QueryInfoRequest.Parse() error = %v", err)
+	} else if query.FileInfoClass != 0x06 {
+		t.Errorf("FileInfoClass = %#x, want 0x06", query.FileInfoClass)
+	}
+
+	var set SetInfoRequest
+	if err := set.Parse(message(33, 32, func(b []byte) { b[2], b[3] = 1, 0x04 })); err != nil {
+		t.Errorf("SetInfoRequest.Parse() error = %v", err)
+	}
+
+	var dir QueryDirectoryRequest
+	if err := dir.Parse(message(33, 32, func(b []byte) { b[2] = 0x25 })); err != nil {
+		t.Errorf("QueryDirectoryRequest.Parse() error = %v", err)
+	}
+
+	var read ReadRequest
+	if err := read.Parse(message(49, 48, func(b []byte) {})); err != nil {
+		t.Errorf("ReadRequest.Parse() error = %v", err)
 	}
 }

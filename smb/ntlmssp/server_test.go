@@ -149,3 +149,79 @@ func TestNTOWFv2KnownVector(t *testing.T) {
 		t.Fatal("NTOWFv2 collision across passwords")
 	}
 }
+
+func marshalNegotiate() []byte {
+	out := make([]byte, 32)
+	copy(out[0:8], ntlmSignature[:])
+	binary.LittleEndian.PutUint32(out[8:12], MsgNegotiate)
+	binary.LittleEndian.PutUint32(out[12:16], serverChallengeFlags)
+	return out
+}
+
+// The Linux kernel SMB client sends raw NTLMSSP and rejects an
+// SPNEGO-wrapped challenge, so replies must mirror the client's framing.
+func TestNegotiateReplyMirrorsClientFraming(t *testing.T) {
+	lookup := &staticLookup{keys: map[string][]byte{}}
+
+	raw := NewServer(lookup, "SRV")().(*serverAuthenticator)
+	res, err := raw.Accept(context.Background(), marshalNegotiate())
+	if err != nil {
+		t.Fatalf("raw NTLMSSP negotiate rejected: %v", err)
+	}
+	if !isNTLMSSP(res.OutputToken) {
+		t.Fatalf("raw negotiate answered with %x..., want a bare NTLMSSP challenge", res.OutputToken[:min(8, len(res.OutputToken))])
+	}
+
+	wrappedToken, err := wrapNegTokenResp(1, marshalNegotiate())
+	if err != nil {
+		t.Fatal(err)
+	}
+	wrapped := NewServer(lookup, "SRV")().(*serverAuthenticator)
+	res, err = wrapped.Accept(context.Background(), wrappedToken)
+	if err != nil {
+		t.Fatalf("SPNEGO negotiate rejected: %v", err)
+	}
+	if len(res.OutputToken) == 0 || res.OutputToken[0] != 0xA1 {
+		t.Fatalf("SPNEGO negotiate answered with %x..., want a NegTokenResp", res.OutputToken[:min(8, len(res.OutputToken))])
+	}
+}
+
+// A raw NTLMSSP handshake ends with an empty security buffer.
+func TestRawAuthenticateReturnsNoToken(t *testing.T) {
+	const password, user, domain = "pw", "alice", "TEST"
+	lookup := &staticLookup{keys: map[string][]byte{domain + "\\" + user: NTOWFv2(password, user, domain)}}
+
+	srv := NewServer(lookup, "SRV")().(*serverAuthenticator)
+	if _, err := srv.Accept(context.Background(), marshalNegotiate()); err != nil {
+		t.Fatalf("negotiate rejected: %v", err)
+	}
+	res, err := srv.Accept(context.Background(), buildAuthenticateClient(t, password, user, domain, srv.challenge))
+	if err != nil {
+		t.Fatalf("authenticate rejected: %v", err)
+	}
+	if len(res.OutputToken) != 0 {
+		t.Fatalf("raw authenticate returned a %d-byte token, want none", len(res.OutputToken))
+	}
+}
+
+// Windows fails session setup with STATUS_INVALID_PARAMETER when the
+// challenge claims a version it does not carry.
+func TestChallengeDoesNotClaimAVersionItOmits(t *testing.T) {
+	srv := NewServer(&staticLookup{keys: map[string][]byte{}}, "SRV")().(*serverAuthenticator)
+	res, err := srv.Accept(context.Background(), marshalNegotiate())
+	if err != nil {
+		t.Fatalf("negotiate rejected: %v", err)
+	}
+	challenge := res.OutputToken
+	if len(challenge) < challengeFixedLen {
+		t.Fatalf("challenge is %d bytes, want at least %d", len(challenge), challengeFixedLen)
+	}
+	flags := binary.LittleEndian.Uint32(challenge[20:24])
+	version := binary.LittleEndian.Uint64(challenge[48:56])
+	if flags&FlagNegotiateVersion != 0 && version == 0 {
+		t.Fatal("challenge sets NEGOTIATE_VERSION but carries an all-zero version")
+	}
+	if flags&FlagNegotiateTargetInfo == 0 || flags&FlagNegotiateExtSecurity == 0 {
+		t.Fatalf("challenge flags = %#08x, want target info and extended session security", flags)
+	}
+}
