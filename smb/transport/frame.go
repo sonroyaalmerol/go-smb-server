@@ -30,6 +30,15 @@ type FramedConn struct {
 	rawConn net.Conn
 	readBuf []byte
 	hdrBuf  [HeaderLen]byte
+
+	// A frame can arrive over several reads, and a read deadline can expire
+	// partway through it. readHdr, hdrRead and bodyRead keep what has
+	// arrived of the frame being read, so the next ReadMessage carries on
+	// from there instead of reading the rest of the frame as a new header.
+	readHdr  [HeaderLen]byte
+	hdrRead  int
+	bodyLen  int
+	bodyRead int
 }
 
 func NewFramedConn(c net.Conn) *FramedConn {
@@ -39,30 +48,71 @@ func NewFramedConn(c net.Conn) *FramedConn {
 	return fc
 }
 
+// ReadMessage returns the next frame's payload. The returned slice is reused
+// by the next call.
+//
+// An error from the connection, such as an expired read deadline, leaves a
+// partly read frame in place: calling ReadMessage again resumes it. Callers
+// that poll with short deadlines rely on this, since a large frame can take
+// longer than the poll interval to arrive.
 func (f *FramedConn) ReadMessage() ([]byte, error) {
-	if _, err := io.ReadFull(f.r, f.hdrBuf[:]); err != nil {
-		return nil, fmt.Errorf("transport: read frame header: %w", err)
+	for f.hdrRead < HeaderLen {
+		n, err := f.r.Read(f.readHdr[f.hdrRead:])
+		f.hdrRead += n
+		if f.hdrRead == HeaderLen {
+			break
+		}
+		if err != nil {
+			if errors.Is(err, io.EOF) && f.hdrRead > 0 {
+				err = io.ErrUnexpectedEOF
+			}
+			return nil, fmt.Errorf("transport: read frame header: %w", err)
+		}
 	}
-	if f.hdrBuf[0] != 0x00 {
-		return nil, fmt.Errorf("transport: unexpected frame type byte 0x%02x", f.hdrBuf[0])
+	if f.bodyLen == 0 && f.bodyRead == 0 {
+		// The header has just been completed.
+		if f.readHdr[0] != 0x00 {
+			f.resetRead()
+			return nil, fmt.Errorf("transport: unexpected frame type byte 0x%02x", f.readHdr[0])
+		}
+		n := int(readUint24(f.readHdr[1:]))
+		if n == 0 {
+			f.resetRead()
+			f.readBuf = f.readBuf[:0]
+			return f.readBuf, nil
+		}
+		if n > MaxMessageLen {
+			f.resetRead()
+			return nil, fmt.Errorf("%w: %d bytes", ErrFrameTooLarge, n)
+		}
+		if cap(f.readBuf) < n {
+			f.readBuf = make([]byte, n)
+		} else {
+			f.readBuf = f.readBuf[:n]
+		}
+		f.bodyLen = n
 	}
-	n := int(readUint24(f.hdrBuf[1:]))
-	if n == 0 {
-		f.readBuf = f.readBuf[:0]
-		return f.readBuf, nil
+	for f.bodyRead < f.bodyLen {
+		n, err := f.r.Read(f.readBuf[f.bodyRead:f.bodyLen])
+		f.bodyRead += n
+		if f.bodyRead == f.bodyLen {
+			break
+		}
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				err = io.ErrUnexpectedEOF
+			}
+			return nil, fmt.Errorf("transport: read frame body: %w", err)
+		}
 	}
-	if n > MaxMessageLen {
-		return nil, fmt.Errorf("%w: %d bytes", ErrFrameTooLarge, n)
-	}
-	if cap(f.readBuf) < n {
-		f.readBuf = make([]byte, n)
-	} else {
-		f.readBuf = f.readBuf[:n]
-	}
-	if _, err := io.ReadFull(f.r, f.readBuf); err != nil {
-		return nil, fmt.Errorf("transport: read frame body: %w", err)
-	}
-	return f.readBuf, nil
+	msg := f.readBuf[:f.bodyLen]
+	f.resetRead()
+	return msg, nil
+}
+
+// resetRead forgets the frame just read, or one that cannot be read.
+func (f *FramedConn) resetRead() {
+	f.hdrRead, f.bodyLen, f.bodyRead = 0, 0, 0
 }
 
 func (f *FramedConn) WriteMessage(payload []byte) error {
