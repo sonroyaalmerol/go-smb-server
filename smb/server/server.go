@@ -82,7 +82,10 @@ func New(opts ...Option) (*Server, error) {
 		return nil, errors.New("server: at least one share is required")
 	}
 	if s.authFactory == nil {
-		s.authFactory = auth.AlwaysAllowFactory()
+		// Authentication must be explicitly configured. Silently installing
+		// an allow-all authenticator would expose every configured share to
+		// unauthenticated clients when the caller omits WithAuth.
+		return nil, errors.New("server: authentication factory is required")
 	}
 	s.shareByName = make(map[string]vfs.Share, len(s.shares))
 	for _, sh := range s.shares {

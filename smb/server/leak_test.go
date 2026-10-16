@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/sonroyaalmerol/go-smb-server/smb/auth"
 	"github.com/sonroyaalmerol/go-smb-server/smb/ntlmssp"
 	"github.com/sonroyaalmerol/go-smb-server/smb/vfs"
 )
@@ -92,6 +93,10 @@ func TestShutdownClosesListener(t *testing.T) {
 	srv, err := New(
 		WithShares(vfs.NewDiskShare("share", newMemBackend())),
 		WithAddr("127.0.0.1:0"),
+		// This test exercises shutdown, not credential validation.
+		// Supply an explicit test authenticator to satisfy the
+		// constructor's fail-closed authentication requirement.
+		WithAuth(auth.AlwaysAllowFactory()),
 	)
 	if err != nil {
 		t.Fatal(err)
