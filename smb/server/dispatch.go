@@ -107,7 +107,7 @@ func (c *conn) handleNegotiate(msg []byte, hdr *wire.Header) uint32 {
 	}
 
 	resp := wire.NegotiateResponse{
-		SecurityMode:    wire.SigningEnabled,
+		SecurityMode:    wire.SigningEnabled | wire.SigningRequired,
 		DialectRevision: dialect,
 		ServerGuid:      c.srv.guid,
 		Capabilities:    c.negotiateCapabilities(),
@@ -169,6 +169,8 @@ func (c *conn) handleSessionSetup(ctx context.Context, msg []byte, hdr *wire.Hea
 
 	result, err := sess.auth.Accept(ctx, req.SecurityBuffer)
 	if err != nil {
+		// A failed handshake must not retain an allocated SMB session.
+		delete(c.sessions, hdr.SessionId)
 		if errors.Is(err, auth.ErrLogonFailed) {
 			return c.errBody(wire.StatusLogonFailure)
 		}
@@ -182,12 +184,33 @@ func (c *conn) handleSessionSetup(ctx context.Context, msg []byte, hdr *wire.Hea
 		ssr.SessionFlags |= wire.SessionFlagEncryptData
 	}
 	if result.Identity != nil {
-		sess.identity = result.Identity
-		sess.authenticated = true
-		sess.signer, _ = signing.NewSigner(signing.DeriveSigningKey(result.SessionKey))
+		// An identity alone is not sufficient to establish a secure SMB
+		// session. Validate the authentication key before any KDF runs:
+		// HMAC-based derivation also produces output for an empty key.
+		// NTLM supplies 16 bytes; supported Kerberos keys may be 32.
+		if len(result.SessionKey) != 16 && len(result.SessionKey) != 32 {
+			delete(c.sessions, hdr.SessionId)
+			return c.errBody(wire.StatusLogonFailure)
+		}
+
+		signer, signErr := signing.NewSigner(
+			signing.DeriveSigningKey(result.SessionKey))
+		if signErr != nil {
+			delete(c.sessions, hdr.SessionId)
+			return c.errBody(wire.StatusAccessDenied)
+		}
+
+		// Publish authenticated state only after security setup succeeds.
+		// Activate mandatory request signing only after the
+		// authentication key and signer have been validated.
+		// MS-SMB2: negotiated signing policy and session setup.
+		sess.signer = signer
+		sess.requireSign = true
 		sess.encryptionKey = encryption.DeriveServerEncryptionKey(result.SessionKey)
 		sess.decryptionKey = encryption.DeriveServerDecryptionKey(result.SessionKey)
 		sess.requireEncrypt = c.srv.requireEnc
+		sess.identity = result.Identity
+		sess.authenticated = true
 	}
 	c.out = ssr.Append(c.out)
 	if sess.authenticated {

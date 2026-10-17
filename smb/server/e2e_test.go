@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/sonroyaalmerol/go-smb-server/smb/auth"
+	"github.com/sonroyaalmerol/go-smb-server/smb/signing"
 	"github.com/sonroyaalmerol/go-smb-server/smb/transport"
 	"github.com/sonroyaalmerol/go-smb-server/smb/vfs"
 	"github.com/sonroyaalmerol/go-smb-server/smb/wire"
@@ -52,11 +53,26 @@ func discardLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }
 
+// e2eTestAuthenticator supplies deterministic key material exclusively for
+// protocol and filesystem tests. It does not verify credentials and must
+// never be used in production or authentication-security tests.
+type e2eTestAuthenticator struct{}
+
+func (e2eTestAuthenticator) Accept(_ context.Context, _ []byte) (auth.AcceptResult, error) {
+	return auth.AcceptResult{
+		Identity: &auth.Identity{Username: "e2e-test"},
+		SessionKey: []byte{
+			1, 2, 3, 4, 5, 6, 7, 8,
+			9, 10, 11, 12, 13, 14, 15, 16,
+		},
+	}, nil
+}
+
 func newTestServer(backend vfs.Backend) *Server {
 	return &Server{
 		shareByName: map[string]vfs.Share{"share": vfs.NewDiskShare("share", backend)},
 		shares:      []vfs.Share{vfs.NewDiskShare("share", backend)},
-		authFactory: auth.AlwaysAllowFactory(),
+		authFactory: func() auth.Authenticator { return e2eTestAuthenticator{} },
 		dialect:     wire.DialectSMB302,
 		maxTransact: 65536,
 		maxRead:     1 << 20,
@@ -83,6 +99,42 @@ func mustWrite(t *testing.T, fc *transport.FramedConn, msg []byte) {
 	if err := fc.WriteMessage(msg); err != nil {
 		t.Fatalf("write: %v", err)
 	}
+}
+
+// mustWriteAuthenticated signs a request using the deterministic
+// e2eTestAuthenticator session key. This is test-only key material;
+// production authentication must derive keys from real credentials.
+// MS-SMB2: signed requests authenticate the complete SMB message.
+func mustWriteAuthenticated(
+	t *testing.T,
+	fc *transport.FramedConn,
+	msg []byte,
+) {
+	t.Helper()
+
+	if len(msg) < wire.HeaderSize {
+		t.Fatal("authenticated test request has truncated header")
+	}
+
+	key := signing.DeriveSigningKey([]byte{
+		1, 2, 3, 4, 5, 6, 7, 8,
+		9, 10, 11, 12, 13, 14, 15, 16,
+	})
+
+	signer, err := signing.NewSigner(key)
+	if err != nil {
+		t.Fatalf("initialize test signer: %v", err)
+	}
+
+	// The signed flag must be set before computing the signature.
+	flags := binary.LittleEndian.Uint32(msg[16:20])
+	binary.LittleEndian.PutUint32(msg[16:20], flags|wire.FlagSigned)
+
+	if err := signer.Sign(msg); err != nil {
+		t.Fatalf("sign authenticated test request: %v", err)
+	}
+
+	mustWrite(t, fc, msg)
 }
 
 func TestEndToEnd_Negotiate(t *testing.T) {
@@ -146,7 +198,7 @@ func TestEndToEnd_FullConversation(t *testing.T) {
 	}
 	sessID := rh.SessionId
 
-	mustWrite(t, fc, buildTreeConnect(sessID, `\\server\share`))
+	mustWriteAuthenticated(t, fc, buildTreeConnect(sessID, `\\server\share`))
 	rh, resp := readReply(t, fc)
 	if rh.Status != wire.StatusSuccess {
 		t.Fatalf("tree_connect: %x", rh.Status)
@@ -156,7 +208,7 @@ func TestEndToEnd_FullConversation(t *testing.T) {
 	}
 	treeID := rh.TreeId
 
-	mustWrite(t, fc, buildCreate(sessID, treeID, "test.txt", wire.FileOpenIf))
+	mustWriteAuthenticated(t, fc, buildCreate(sessID, treeID, "test.txt", wire.FileOpenIf))
 	rh, resp = readReply(t, fc)
 	if rh.Status != wire.StatusSuccess {
 		t.Fatalf("create: %x", rh.Status)
@@ -164,13 +216,13 @@ func TestEndToEnd_FullConversation(t *testing.T) {
 	var fid [16]byte
 	copy(fid[:], resp[64+64:64+80])
 
-	mustWrite(t, fc, buildWrite(sessID, treeID, fid, 0, []byte("hello")))
+	mustWriteAuthenticated(t, fc, buildWrite(sessID, treeID, fid, 0, []byte("hello")))
 	rh, _ = readReply(t, fc)
 	if rh.Status != wire.StatusSuccess {
 		t.Fatalf("write: %x", rh.Status)
 	}
 
-	mustWrite(t, fc, buildRead(sessID, treeID, fid, 0, 5))
+	mustWriteAuthenticated(t, fc, buildRead(sessID, treeID, fid, 0, 5))
 	rh, resp = readReply(t, fc)
 	if rh.Status != wire.StatusSuccess {
 		t.Fatalf("read: %x", rh.Status)
@@ -179,7 +231,7 @@ func TestEndToEnd_FullConversation(t *testing.T) {
 		t.Fatalf("read data = %q", string(resp[64+16:]))
 	}
 
-	mustWrite(t, fc, buildClose(sessID, treeID, fid))
+	mustWriteAuthenticated(t, fc, buildClose(sessID, treeID, fid))
 	rh, _ = readReply(t, fc)
 	if rh.Status != wire.StatusSuccess {
 		t.Fatalf("close: %x", rh.Status)
@@ -322,7 +374,7 @@ func TestEndToEnd_QueryDirectory(t *testing.T) {
 	treeID := treeConnect(t, fc, sessID)
 
 	createMsg := buildCreate(sessID, treeID, "", wire.FileOpen)
-	mustWrite(t, fc, createMsg)
+	mustWriteAuthenticated(t, fc, createMsg)
 	rh, resp := readReply(t, fc)
 	if rh.Status != wire.StatusSuccess {
 		t.Fatalf("create dir: %x", rh.Status)
@@ -330,7 +382,7 @@ func TestEndToEnd_QueryDirectory(t *testing.T) {
 	var dirFid [16]byte
 	copy(dirFid[:], resp[64+64:64+80])
 
-	mustWrite(t, fc, buildQueryDirectory(sessID, treeID, dirFid, "*"))
+	mustWriteAuthenticated(t, fc, buildQueryDirectory(sessID, treeID, dirFid, "*"))
 	rh, resp = readReply(t, fc)
 	if rh.Status != wire.StatusSuccess {
 		t.Fatalf("query_directory: %x", rh.Status)
@@ -372,7 +424,7 @@ func sessionSetup(t *testing.T, fc *transport.FramedConn) uint64 {
 
 func treeConnect(t *testing.T, fc *transport.FramedConn, sessID uint64) uint32 {
 	t.Helper()
-	mustWrite(t, fc, buildTreeConnect(sessID, `\\server\share`))
+	mustWriteAuthenticated(t, fc, buildTreeConnect(sessID, `\\server\share`))
 	rh, _ := readReply(t, fc)
 	if rh.Status != wire.StatusSuccess {
 		t.Fatalf("tree_connect: %x", rh.Status)
@@ -407,7 +459,7 @@ func TestEndToEnd_QueryInfoAndDeleteOnClose(t *testing.T) {
 	treeID := treeConnect(t, fc, sessID)
 
 	// CREATE a file
-	mustWrite(t, fc, buildCreate(sessID, treeID, "qinfo.txt", wire.FileOpenIf))
+	mustWriteAuthenticated(t, fc, buildCreate(sessID, treeID, "qinfo.txt", wire.FileOpenIf))
 	rh, resp := readReply(t, fc)
 	if rh.Status != wire.StatusSuccess {
 		t.Fatalf("create: %x", rh.Status)
@@ -416,7 +468,7 @@ func TestEndToEnd_QueryInfoAndDeleteOnClose(t *testing.T) {
 	copy(fid[:], resp[64+64:64+80])
 
 	// QUERY_INFO FileBasicInformation
-	mustWrite(t, fc, buildQueryInfo(sessID, treeID, fid, wire.FileBasicInfoClass))
+	mustWriteAuthenticated(t, fc, buildQueryInfo(sessID, treeID, fid, wire.FileBasicInfoClass))
 	rh, qResp := readReply(t, fc)
 	if rh.Status != wire.StatusSuccess {
 		t.Fatalf("query_info: %x", rh.Status)
@@ -427,21 +479,21 @@ func TestEndToEnd_QueryInfoAndDeleteOnClose(t *testing.T) {
 	}
 
 	// SET_INFO FileDispositionInformation = 1 (delete on close)
-	mustWrite(t, fc, buildSetInfo(sessID, treeID, fid, wire.FileDispositionInformation, []byte{1}))
+	mustWriteAuthenticated(t, fc, buildSetInfo(sessID, treeID, fid, wire.FileDispositionInformation, []byte{1}))
 	rh, _ = readReply(t, fc)
 	if rh.Status != wire.StatusSuccess {
 		t.Fatalf("set_info: %x", rh.Status)
 	}
 
 	// CLOSE should delete the file
-	mustWrite(t, fc, buildClose(sessID, treeID, fid))
+	mustWriteAuthenticated(t, fc, buildClose(sessID, treeID, fid))
 	rh, _ = readReply(t, fc)
 	if rh.Status != wire.StatusSuccess {
 		t.Fatalf("close: %x", rh.Status)
 	}
 
 	// Re-open should now fail (file gone).
-	mustWrite(t, fc, buildCreate(sessID, treeID, "qinfo.txt", wire.FileOpen))
+	mustWriteAuthenticated(t, fc, buildCreate(sessID, treeID, "qinfo.txt", wire.FileOpen))
 	rh, _ = readReply(t, fc)
 	if rh.Status == wire.StatusSuccess {
 		t.Fatal("expected file to be deleted")
@@ -496,7 +548,7 @@ func TestEndToEnd_LockConflict(t *testing.T) {
 	treeID := treeConnect(t, fc, sessID)
 
 	// Open the same file twice.
-	mustWrite(t, fc, buildCreate(sessID, treeID, "locktest.txt", wire.FileOpenIf))
+	mustWriteAuthenticated(t, fc, buildCreate(sessID, treeID, "locktest.txt", wire.FileOpenIf))
 	rh, resp := readReply(t, fc)
 	if rh.Status != wire.StatusSuccess {
 		t.Fatalf("create1: %x", rh.Status)
@@ -504,7 +556,7 @@ func TestEndToEnd_LockConflict(t *testing.T) {
 	var fid1 [16]byte
 	copy(fid1[:], resp[64+64:64+80])
 
-	mustWrite(t, fc, buildCreate(sessID, treeID, "locktest.txt", wire.FileOpenIf))
+	mustWriteAuthenticated(t, fc, buildCreate(sessID, treeID, "locktest.txt", wire.FileOpenIf))
 	rh, resp = readReply(t, fc)
 	if rh.Status != wire.StatusSuccess {
 		t.Fatalf("create2: %x", rh.Status)
@@ -513,26 +565,26 @@ func TestEndToEnd_LockConflict(t *testing.T) {
 	copy(fid2[:], resp[64+64:64+80])
 
 	// Take an exclusive lock on [0,100) from fid1.
-	mustWrite(t, fc, buildLock(sessID, treeID, fid1, 0, 100, wire.LockFlagExclusiveLock))
+	mustWriteAuthenticated(t, fc, buildLock(sessID, treeID, fid1, 0, 100, wire.LockFlagExclusiveLock))
 	rh, _ = readReply(t, fc)
 	if rh.Status != wire.StatusSuccess {
 		t.Fatalf("lock1: %x", rh.Status)
 	}
 
 	// An exclusive lock on the same range from fid2 must conflict.
-	mustWrite(t, fc, buildLock(sessID, treeID, fid2, 0, 100, wire.LockFlagExclusiveLock|wire.LockFlagFailImmediately))
+	mustWriteAuthenticated(t, fc, buildLock(sessID, treeID, fid2, 0, 100, wire.LockFlagExclusiveLock|wire.LockFlagFailImmediately))
 	rh, _ = readReply(t, fc)
 	if rh.Status != wire.StatusLockConflict {
 		t.Fatalf("expected lock conflict, got %x", rh.Status)
 	}
 
 	// Unlock from fid1, then fid2's lock should succeed.
-	mustWrite(t, fc, buildLock(sessID, treeID, fid1, 0, 100, wire.LockFlagUnlock))
+	mustWriteAuthenticated(t, fc, buildLock(sessID, treeID, fid1, 0, 100, wire.LockFlagUnlock))
 	rh, _ = readReply(t, fc)
 	if rh.Status != wire.StatusSuccess {
 		t.Fatalf("unlock: %x", rh.Status)
 	}
-	mustWrite(t, fc, buildLock(sessID, treeID, fid2, 0, 100, wire.LockFlagExclusiveLock|wire.LockFlagFailImmediately))
+	mustWriteAuthenticated(t, fc, buildLock(sessID, treeID, fid2, 0, 100, wire.LockFlagExclusiveLock|wire.LockFlagFailImmediately))
 	rh, _ = readReply(t, fc)
 	if rh.Status != wire.StatusSuccess {
 		t.Fatalf("lock2 after unlock: %x", rh.Status)
@@ -576,7 +628,7 @@ func TestEndToEnd_ChangeNotify(t *testing.T) {
 	treeID := treeConnect(t, fc, sessID)
 
 	// Open the directory root.
-	mustWrite(t, fc, buildCreate(sessID, treeID, "", wire.FileOpen))
+	mustWriteAuthenticated(t, fc, buildCreate(sessID, treeID, "", wire.FileOpen))
 	rh, resp := readReply(t, fc)
 	if rh.Status != wire.StatusSuccess {
 		t.Fatalf("create dir: %x", rh.Status)
@@ -585,7 +637,7 @@ func TestEndToEnd_ChangeNotify(t *testing.T) {
 	copy(dirFid[:], resp[64+64:64+80])
 
 	// Subscribe to CHANGE_NOTIFY (async).
-	mustWrite(t, fc, buildChangeNotify(sessID, treeID, dirFid, FileNotifyChangeFileName))
+	mustWriteAuthenticated(t, fc, buildChangeNotify(sessID, treeID, dirFid, FileNotifyChangeFileName))
 	// Expect the interim STATUS_PENDING response.
 	rh, _ = readReply(t, fc)
 	if rh.Status != wire.StatusPending {

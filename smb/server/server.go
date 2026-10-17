@@ -82,7 +82,10 @@ func New(opts ...Option) (*Server, error) {
 		return nil, errors.New("server: at least one share is required")
 	}
 	if s.authFactory == nil {
-		s.authFactory = auth.AlwaysAllowFactory()
+		// Authentication must be explicitly configured. Silently installing
+		// an allow-all authenticator would expose every configured share to
+		// unauthenticated clients when the caller omits WithAuth.
+		return nil, errors.New("server: authentication factory is required")
 	}
 	s.shareByName = make(map[string]vfs.Share, len(s.shares))
 	for _, sh := range s.shares {
@@ -232,7 +235,9 @@ func (s *Server) serveConn(ctx context.Context, c net.Conn) {
 		if err := ctx.Err(); err != nil {
 			return
 		}
-		cn.drainAsync()
+		if !cn.drainAsync() {
+			return
+		}
 
 		_ = cn.fc.Underlying().SetReadDeadline(time.Now().Add(200 * time.Millisecond))
 		msg, err := cn.fc.ReadMessage()
@@ -273,10 +278,12 @@ func (s *Server) serveConn(ctx context.Context, c net.Conn) {
 		}
 		cn.handleMessage(connCtx, msg)
 		if len(cn.out) > 0 {
-			if sealed, ok := cn.maybeSealResponse(cn.out); ok {
-				cn.out = sealed
+			sealed, err := cn.maybeSealResponse(cn.out)
+			if err != nil {
+				cn.log.Debug("response encryption failed", "err", err)
+				return
 			}
-			if err := cn.fc.WriteMessage(cn.out); err != nil {
+			if err := cn.fc.WriteMessage(sealed); err != nil {
 				cn.log.Debug("write error", "err", err)
 				return
 			}
@@ -284,21 +291,71 @@ func (s *Server) serveConn(ctx context.Context, c net.Conn) {
 	}
 }
 
-func (c *conn) drainAsync() {
+// drainAsync applies the same response-encryption policy as the
+// synchronous writer. A sealing or write failure terminates the
+// connection's response path rather than exposing plaintext.
+func (c *conn) drainAsync() bool {
 	for {
 		select {
 		case resp := <-c.asyncResp:
-			if err := c.fc.WriteMessage(resp); err != nil {
+			sealed, err := c.maybeSealResponse(resp)
+			if err != nil {
+				c.log.Debug("async response encryption failed", "err", err)
+				return false
+			}
+			if err := c.fc.WriteMessage(sealed); err != nil {
 				c.log.Debug("write async error", "err", err)
-				return
+				return false
 			}
 		default:
-			return
+			return true
 		}
 	}
 }
 
+// validateCompoundRequest checks the entire request chain before dispatch.
+// MS-SMB2 compound commands use eight-byte-aligned NextCommand offsets.
+// Prevalidation prevents a malformed later command from leaving a partial
+// response eligible for transmission.
+func validateCompoundRequest(msg []byte) error {
+	if len(msg) < wire.HeaderSize {
+		return errors.New("server: truncated compound request")
+	}
+
+	for off := 0; off < len(msg); {
+		if len(msg)-off < wire.HeaderSize {
+			return errors.New("server: truncated compound header")
+		}
+
+		var hdr wire.Header
+		if err := hdr.Parse(msg[off:]); err != nil {
+			return fmt.Errorf("server: malformed compound header: %w", err)
+		}
+
+		if hdr.NextCommand == 0 {
+			return nil
+		}
+
+		if hdr.NextCommand < wire.HeaderSize ||
+			hdr.NextCommand%8 != 0 ||
+			uint64(hdr.NextCommand) > uint64(len(msg)-off-wire.HeaderSize) {
+			return errors.New("server: invalid compound request offset")
+		}
+
+		off += int(hdr.NextCommand)
+	}
+
+	return errors.New("server: malformed compound request")
+}
+
 func (c *conn) handleMessage(ctx context.Context, msg []byte) {
+	// Validate the complete chain before executing any operation.
+	if err := validateCompoundRequest(msg); err != nil {
+		c.log.Debug("reject malformed compound request", "err", err)
+		c.out = c.out[:0]
+		return
+	}
+
 	off := 0
 	first := true
 	chainFailed := false
@@ -313,10 +370,24 @@ func (c *conn) handleMessage(ctx context.Context, msg []byte) {
 			c.log.Debug("bad header in compound", "err", err)
 			return
 		}
+		// Verify the original bounded command before any related-operation
+		// substitution. NextCommand is part of the signed SMB header.
+		end := len(sub)
+		if hdr.NextCommand != 0 {
+			end = int(hdr.NextCommand)
+		}
+		part := sub[:end]
+		if err := verifyCompoundRequestSignature(
+			c.getSession(hdr.SessionId), &hdr, part,
+		); err != nil {
+			chainFailed = true
+			lastStatus = wire.StatusAccessDenied
+		}
+
 		related := hdr.Flags&wire.FlagRelatedOps != 0 && !first
-		if related {
-			if fo := fileIdOffset(hdr.Command); fo >= 0 && fo+16 <= len(sub) {
-				copy(sub[fo:fo+16], lastFileId[:])
+		if related && !chainFailed {
+			if fo := fileIdOffset(hdr.Command); fo >= 0 && fo+16 <= len(part) {
+				copy(part[fo:fo+16], lastFileId[:])
 			}
 		}
 
@@ -325,19 +396,6 @@ func (c *conn) handleMessage(ctx context.Context, msg []byte) {
 			c.creditBalance -= charge
 		} else {
 			c.creditBalance = 0
-		}
-
-		if sess := c.getSession(hdr.SessionId); sess != nil && sess.signer != nil {
-			if hdr.Flags&wire.FlagSigned != 0 {
-				ok, vErr := sess.signer.Verify(sub)
-				if vErr != nil || !ok {
-					chainFailed = true
-					lastStatus = wire.StatusAccessDenied
-				}
-			} else if sess.requireSign {
-				chainFailed = true
-				lastStatus = wire.StatusAccessDenied
-			}
 		}
 
 		if hdr.Command == wire.CmdChangeNotify && !chainFailed {
@@ -405,17 +463,9 @@ func (c *conn) handleMessage(ctx context.Context, msg []byte) {
 			c.updatePreauth(c.out[respStart:])
 		}
 
-		if sess := c.getSession(hdr.SessionId); sess != nil && sess.signer != nil {
-			encrypting := sess.requireEncrypt && hdr.Command != wire.CmdNegotiate && hdr.Command != wire.CmdSessionSetup
-			if !encrypting {
-				subResp := c.out[respStart:]
-				hdr.Flags |= wire.FlagSigned
-				binary.LittleEndian.PutUint32(subResp[16:20], hdr.Flags)
-				if err := sess.signer.Sign(subResp); err != nil {
-					c.log.Debug("sign response failed", "err", err)
-				}
-			}
-		}
+		// Sign after all compound offsets have been finalized.
+		// SMB signatures cover NextCommand, so signing here would
+		// authenticate a header that may subsequently be modified.
 
 		prevRespStart = respStart
 		first = false
@@ -424,6 +474,94 @@ func (c *conn) handleMessage(ctx context.Context, msg []byte) {
 		}
 		off += int(hdr.NextCommand)
 	}
+
+	// A compound response must be fully assembled before signing.
+	// Never transmit a partially signed response.
+	if err := c.signResponseChain(); err != nil {
+		c.log.Debug("response signing failed", "err", err)
+		c.out = c.out[:0]
+	}
+}
+
+// signResponseChain signs finalized SMB2 response segments.
+// See MS-SMB2: compound responses and SMB2 header NextCommand.
+// Any failure prevents the caller from transmitting the response.
+func (c *conn) signResponseChain() error {
+	for off := 0; off < len(c.out); {
+		if len(c.out)-off < wire.HeaderSize {
+			return errors.New("server: truncated compound response")
+		}
+
+		sub := c.out[off:]
+		var hdr wire.Header
+		if err := hdr.Parse(sub); err != nil {
+			return fmt.Errorf("server: invalid response header: %w", err)
+		}
+
+		end := len(c.out)
+		if hdr.NextCommand != 0 {
+			if hdr.NextCommand < wire.HeaderSize ||
+				uint64(hdr.NextCommand) > uint64(len(sub)) ||
+				hdr.NextCommand%8 != 0 {
+				return errors.New("server: invalid compound response offset")
+			}
+			end = off + int(hdr.NextCommand)
+		}
+
+		if sess := c.getSession(hdr.SessionId); sess != nil && sess.signer != nil {
+			encrypting := sess.requireEncrypt &&
+				hdr.Command != wire.CmdNegotiate &&
+				hdr.Command != wire.CmdSessionSetup
+
+			if !encrypting {
+				part := c.out[off:end]
+				hdr.Flags |= wire.FlagSigned
+				binary.LittleEndian.PutUint32(part[16:20], hdr.Flags)
+
+				if err := sess.signer.Sign(part); err != nil {
+					return fmt.Errorf("server: sign response: %w", err)
+				}
+			}
+		}
+
+		off = end
+	}
+	return nil
+}
+
+// verifyCompoundRequestSignature authenticates one bounded SMB command.
+// MS-SMB2 compound signing covers the individual command, including its
+// finalized NextCommand field. Verify mutates its input, so use a copy to
+// preserve the original request bytes for subsequent processing.
+func verifyCompoundRequestSignature(
+	sess *session, hdr *wire.Header, part []byte,
+) error {
+	if sess == nil {
+		// Unknown sessions are rejected by dispatch's session checks.
+		return nil
+	}
+	if sess.authenticated && sess.signer == nil {
+		return errors.New("server: authenticated session missing signer")
+	}
+	if hdr.Flags&wire.FlagSigned == 0 {
+		if sess.requireSign {
+			return errors.New("server: required request signature missing")
+		}
+		return nil
+	}
+	if sess.signer == nil {
+		return errors.New("server: signed request without signer")
+	}
+
+	signed := append([]byte(nil), part...)
+	ok, err := sess.signer.Verify(signed)
+	if err != nil {
+		return fmt.Errorf("server: request signature verification: %w", err)
+	}
+	if !ok {
+		return errors.New("server: invalid request signature")
+	}
+	return nil
 }
 
 func fileIdOffset(cmd uint16) int {
