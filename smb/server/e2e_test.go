@@ -52,11 +52,26 @@ func discardLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }
 
+// e2eTestAuthenticator supplies deterministic key material exclusively for
+// protocol and filesystem tests. It does not verify credentials and must
+// never be used in production or authentication-security tests.
+type e2eTestAuthenticator struct{}
+
+func (e2eTestAuthenticator) Accept(_ context.Context, _ []byte) (auth.AcceptResult, error) {
+	return auth.AcceptResult{
+		Identity: &auth.Identity{Username: "e2e-test"},
+		SessionKey: []byte{
+			1, 2, 3, 4, 5, 6, 7, 8,
+			9, 10, 11, 12, 13, 14, 15, 16,
+		},
+	}, nil
+}
+
 func newTestServer(backend vfs.Backend) *Server {
 	return &Server{
 		shareByName: map[string]vfs.Share{"share": vfs.NewDiskShare("share", backend)},
 		shares:      []vfs.Share{vfs.NewDiskShare("share", backend)},
-		authFactory: auth.AlwaysAllowFactory(),
+		authFactory: func() auth.Authenticator { return e2eTestAuthenticator{} },
 		dialect:     wire.DialectSMB302,
 		maxTransact: 65536,
 		maxRead:     1 << 20,
